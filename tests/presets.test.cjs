@@ -15,7 +15,7 @@ function database(path = ':memory:') {
     runAsync: async (sql, ...values) => db.prepare(sql).run(...values),
     getAllAsync: async (sql, ...values) => db.prepare(sql).all(...values),
   };
-  return { db, driver, repo: new CalendarRepository(driver) };
+  return { db, driver, repo: new CalendarRepository(driver, () => new Date(2026, 10, 1, 12)) };
 }
 const base = { title: '수업', weekday: 0, startMinute: 540, endMinute: 600, color: '#426FD0' };
 const lastPreset = snapshot => snapshot.presets.at(-1);
@@ -34,7 +34,7 @@ test('v1 migration preserves old IDs, metadata, dated events and initialization 
   const beforeEvents = db.prepare('SELECT * FROM events').all();
   const beforeTemplates = db.prepare('SELECT * FROM templates ORDER BY weekday').all();
   const snapshot = await repo.initialize();
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
   assert.equal(snapshot.presets.length, 1);
   assert.equal(snapshot.presets[0].name, '기본 시간표 1');
   assert.equal(snapshot.presets[0].isDefault, 1);

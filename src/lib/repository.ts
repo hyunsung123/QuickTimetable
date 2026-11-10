@@ -1,7 +1,7 @@
 import type { CalendarEvent, EventClipboard, EventInput, EventTimeChange, Snapshot, TemplateInput, TimetableTemplate, TimetablePreset, TimetableImportSource } from '../types/calendar';
 import { addDays, mondayOf, parseDate, weekdayOf } from './dates';
 import { overlaps, pastedEvent, TimetableActionError } from './timetable';
-import { nextPresetName } from './presets';
+import { nextApplyWeek, nextPresetName } from './presets';
 
 type SqlValue = string | number | null;
 export interface DatabaseDriver {
@@ -58,7 +58,7 @@ function newId() {
 
 export class CalendarRepository {
   private pending: Promise<unknown> = Promise.resolve();
-  constructor(private db: DatabaseDriver) {}
+  constructor(private db: DatabaseDriver, private now: () => Date = () => new Date()) {}
 
   // Serialize complete transactions and reads; Expo's async transactions otherwise
   // allow unrelated queries to accidentally join the same transaction.
@@ -175,34 +175,50 @@ export class CalendarRepository {
     return this.serial(async () => {
       await this.db.execAsync('PRAGMA foreign_keys = ON;');
       const [{ user_version: version }] = await this.db.getAllAsync<{ user_version: number }>('PRAGMA user_version');
-      if (version > 2) throw new Error('이 데이터베이스는 더 최신 앱에서 만들어졌습니다.');
-      if (version === 2) return this.snapshot();
+      if (version > 3) throw new Error('이 데이터베이스는 더 최신 앱에서 만들어졌습니다.');
+      if (version === 3) return this.snapshot();
       await this.db.execAsync('BEGIN IMMEDIATE');
       try {
-        await this.db.execAsync(schema);
-        await this.db.execAsync(presetSchema);
-        const id = newId();
-        const now = new Date().toISOString();
-        await this.db.runAsync('INSERT INTO timetable_presets VALUES (?, ?, 1, ?, ?)', id, '기본 시간표 1', now, now);
-        // Rebuild only the old template table so presetId has a real NOT NULL FK.
-        // Dated events deliberately keep their original templateId as provenance.
-        await this.db.execAsync(`CREATE TABLE templates_v2 (
-          id TEXT PRIMARY KEY, presetId TEXT NOT NULL REFERENCES timetable_presets(id) ON DELETE CASCADE,
-          calendarId TEXT NOT NULL REFERENCES calendars(id), title TEXT NOT NULL,
-          weekday INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
-          startMinute INTEGER NOT NULL CHECK(startMinute >= 0 AND startMinute % 30 = 0),
-          endMinute INTEGER NOT NULL CHECK(endMinute <= 1440 AND endMinute % 30 = 0 AND endMinute - startMinute >= 30),
-          color TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
-        );`);
-        await this.db.runAsync(`INSERT INTO templates_v2 SELECT id, ?, calendarId, title, weekday, startMinute, endMinute, color, createdAt, updatedAt FROM templates`, id);
-        await this.db.execAsync(`DROP TABLE templates; ALTER TABLE templates_v2 RENAME TO templates;
-          CREATE INDEX templates_preset_day ON templates(presetId, weekday, startMinute);
-          PRAGMA user_version = 2;`);
+        if (version < 2) {
+          await this.db.execAsync(schema);
+          await this.db.execAsync(presetSchema);
+          const id = newId();
+          const now = this.now().toISOString();
+          await this.db.runAsync('INSERT INTO timetable_presets (id, name, isDefault, createdAt, updatedAt) VALUES (?, ?, 1, ?, ?)', id, '기본 시간표 1', now, now);
+          // Only legacy template rows are rebuilt; dated copies and week markers stay intact.
+          await this.db.execAsync(`CREATE TABLE templates_v2 (
+            id TEXT PRIMARY KEY, presetId TEXT NOT NULL REFERENCES timetable_presets(id) ON DELETE CASCADE,
+            calendarId TEXT NOT NULL REFERENCES calendars(id), title TEXT NOT NULL,
+            weekday INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+            startMinute INTEGER NOT NULL CHECK(startMinute >= 0 AND startMinute % 30 = 0),
+            endMinute INTEGER NOT NULL CHECK(endMinute <= 1440 AND endMinute % 30 = 0 AND endMinute - startMinute >= 30),
+            color TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+          );`);
+          await this.db.runAsync(`INSERT INTO templates_v2 SELECT id, ?, calendarId, title, weekday, startMinute, endMinute, color, createdAt, updatedAt FROM templates`, id);
+          await this.db.execAsync(`DROP TABLE templates; ALTER TABLE templates_v2 RENAME TO templates;
+            CREATE INDEX templates_preset_day ON templates(presetId, weekday, startMinute);`);
+        }
+        await this.db.execAsync('ALTER TABLE timetable_presets ADD COLUMN applyFromWeek TEXT;');
+        // Older versions did not record the activation date. Start conservatively
+        // next week at upgrade time, preserving all already materialized data.
+        await this.db.runAsync('UPDATE timetable_presets SET applyFromWeek = ? WHERE isDefault = 1', nextApplyWeek(this.now()));
+        await this.db.execAsync('PRAGMA user_version = 3;');
         const snapshot = await this.snapshot();
         await this.db.execAsync('COMMIT');
         return snapshot;
       } catch (error) { await this.db.execAsync('ROLLBACK'); throw error; }
     });
+  }
+
+  resetData(): Promise<Snapshot> {
+    return this.serial(() => this.transaction(async () => {
+      await this.db.runAsync('DELETE FROM events');
+      await this.db.runAsync('DELETE FROM templates');
+      await this.db.runAsync('DELETE FROM timetable_presets');
+      await this.db.runAsync('DELETE FROM initialized_weeks');
+      // Keep the built-in calendar and every table/index/schema version.
+      await this.db.runAsync("DELETE FROM calendars WHERE id <> 'personal'");
+    }));
   }
 
   saveEvent(input: EventInput, id?: string): Promise<Snapshot> {
@@ -293,7 +309,7 @@ export class CalendarRepository {
       const now = new Date().toISOString();
       const id = newId();
       // Adding a preset never changes the user's current default selection.
-      await this.db.runAsync('INSERT INTO timetable_presets VALUES (?, ?, 0, ?, ?)', id, nextPresetName(presets), now, now);
+      await this.db.runAsync('INSERT INTO timetable_presets (id, name, isDefault, createdAt, updatedAt) VALUES (?, ?, 0, ?, ?)', id, nextPresetName(presets), now, now);
       await this.insertImportedRows(id, rows);
     }));
   }
@@ -308,10 +324,11 @@ export class CalendarRepository {
 
   setDefaultPreset(id: string | null): Promise<Snapshot> {
     return this.serial(() => this.transaction(async () => {
-      if (id !== null) await this.requirePreset(id);
-      const now = new Date().toISOString();
-      await this.db.runAsync('UPDATE timetable_presets SET isDefault = 0, updatedAt = ? WHERE isDefault = 1', now);
-      if (id !== null) await this.db.runAsync('UPDATE timetable_presets SET isDefault = 1, updatedAt = ? WHERE id = ?', now, id);
+      if (id !== null && (await this.requirePreset(id)).isDefault) return;
+      const current = this.now();
+      const now = current.toISOString();
+      await this.db.runAsync('UPDATE timetable_presets SET isDefault = 0, applyFromWeek = NULL, updatedAt = ? WHERE isDefault = 1', now);
+      if (id !== null) await this.db.runAsync('UPDATE timetable_presets SET isDefault = 1, applyFromWeek = ?, updatedAt = ? WHERE id = ?', nextApplyWeek(current), now, id);
     }));
   }
 
@@ -334,30 +351,24 @@ export class CalendarRepository {
   }
 
   ensureWeek(date: string): Promise<Snapshot> {
-    return this.serial(async () => {
+    return this.serial(() => this.transaction(async () => {
       const week = mondayOf(date);
-      await this.db.execAsync('BEGIN IMMEDIATE');
-      try {
-        const existing = await this.db.getAllAsync('SELECT weekStart FROM initialized_weeks WHERE weekStart = ?', week);
-        if (!existing.length) {
-          const dated = await this.db.getAllAsync('SELECT id FROM events WHERE date >= ? AND date < ? LIMIT 1', week, addDays(week, 7));
-          const templates = dated.length ? [] : await this.db.getAllAsync<TimetableTemplate>(`SELECT templates.* FROM templates
-            JOIN timetable_presets ON templates.presetId = timetable_presets.id WHERE timetable_presets.isDefault = 1`);
-          const now = new Date().toISOString();
-          for (const template of templates) {
-            await this.db.runAsync(`INSERT INTO events (id, calendarId, title, date, startMinute, endMinute, color, createdAt, updatedAt, templateId)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            newId(), template.calendarId, template.title, addDays(week, template.weekday), template.startMinute, template.endMinute, template.color, now, now, template.id);
-          }
-          // Keep this marker even after all generated events have been deleted.
-          await this.db.runAsync('INSERT INTO initialized_weeks VALUES (?, ?)', week, now);
+      const existing = await this.db.getAllAsync('SELECT weekStart FROM initialized_weeks WHERE weekStart = ?', week);
+      if (!existing.length) {
+        const dated = await this.db.getAllAsync('SELECT id FROM events WHERE date >= ? AND date < ? LIMIT 1', week, addDays(week, 7));
+        const templates = dated.length ? [] : await this.db.getAllAsync<TimetableTemplate>(`SELECT templates.* FROM templates
+          JOIN timetable_presets ON templates.presetId = timetable_presets.id
+          WHERE timetable_presets.isDefault = 1 AND timetable_presets.applyFromWeek IS NOT NULL AND timetable_presets.applyFromWeek <= ?`, week);
+        const now = new Date().toISOString();
+        for (const template of templates) {
+          await this.db.runAsync(`INSERT INTO events (id, calendarId, title, date, startMinute, endMinute, color, createdAt, updatedAt, templateId)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          newId(), template.calendarId, template.title, addDays(week, template.weekday), template.startMinute, template.endMinute, template.color, now, now, template.id);
         }
-        await this.db.execAsync('COMMIT');
-      } catch (error) {
-        await this.db.execAsync('ROLLBACK');
-        throw error;
+        // Even a non-eligible empty week becomes an explicitly opened week.
+        // Keep its marker after deletion or later changes to the default.
+        await this.db.runAsync('INSERT INTO initialized_weeks VALUES (?, ?)', week, now);
       }
-      return this.snapshot();
-    });
+    }));
   }
 }

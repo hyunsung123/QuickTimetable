@@ -12,6 +12,7 @@ export function PresetList() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef(false);
+  const active = calendar.presets.find(preset => preset.isDefault);
   const perform = async (work: () => Promise<void>) => {
     if (pending.current) return;
     pending.current = true; setBusy(true); setError('');
@@ -33,6 +34,10 @@ export function PresetList() {
       </Pressable>
     </View>)}</View>
     {!calendar.presets.length && <Text style={styles.empty}>저장된 시간표가 없습니다.</Text>}
+    {active && <>
+      {!!active.applyFromWeek && <Text style={styles.empty}>{active.applyFromWeek.replace(/-/g, '. ')}부터 새 주에 적용</Text>}
+      <Pressable accessibilityRole="button" accessibilityLabel="기본 지정 해제" disabled={busy} onPress={() => { void perform(() => calendar.setDefaultPreset(null)); }} style={styles.add}><Text style={styles.addText}>기본 지정 해제</Text></Pressable>
+    </>}
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => setAdding(true)} style={styles.add}><Text style={styles.addText}>+ 시간표 추가</Text></Pressable>
     {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
     {!calendar.presets.some(preset => preset.isDefault) && <Text style={styles.empty}>기본 시간표 없음</Text>}

@@ -40,6 +40,7 @@ export interface TimetablePreset {
   id: string;
   name: string;
   isDefault: number;
+  applyFromWeek: string | null;
   createdAt: string;
   updatedAt: string;
 }

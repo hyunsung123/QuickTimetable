@@ -18,7 +18,7 @@ function database(path = ':memory:') {
     runAsync: async (sql, ...values) => db.prepare(sql).run(...values),
     getAllAsync: async (sql, ...values) => db.prepare(sql).all(...values),
   };
-  return { db, driver, repo: new CalendarRepository(driver) };
+  return { db, driver, repo: new CalendarRepository(driver, () => new Date(2026, 10, 1, 12)) };
 }
 const base = { title: '수업', weekday: 0, startMinute: 540, endMinute: 660, color: '#426FD0' };
 const event = { id: 'drag', title: '공부', day: 2, startMinute: 540, endMinute: 660, color: '#426FD0' };

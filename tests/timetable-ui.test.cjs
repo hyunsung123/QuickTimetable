@@ -174,7 +174,7 @@ test('Provider retains clipboard across screen changes and publishes atomic snap
     runAsync: async (sql, ...values) => db.prepare(sql).run(...values),
     getAllAsync: async (sql, ...values) => db.prepare(sql).all(...values),
   };
-  const repo = new CalendarRepository(driver);
+  const repo = new CalendarRepository(driver, () => new Date(2026, 10, 1, 12));
   await repo.initialize();
   for (const event of events) await repo.saveEvent({ ...event, date: '2026-11-10' }, event.id);
   const { React, TestRenderer, load } = createUiHarness({ repository: repo });
@@ -305,7 +305,7 @@ test('leaving a screen during shared resizing restores both blocks and never com
 
 function repository(t) {
   const db = new DatabaseSync(':memory:'); t.after(() => db.close());
-  return new CalendarRepository({ execAsync: async sql => { db.exec(sql); }, runAsync: async (sql, ...args) => db.prepare(sql).run(...args), getAllAsync: async (sql, ...args) => db.prepare(sql).all(...args) });
+  return new CalendarRepository({ execAsync: async sql => { db.exec(sql); }, runAsync: async (sql, ...args) => db.prepare(sql).run(...args), getAllAsync: async (sql, ...args) => db.prepare(sql).all(...args) }, () => new Date(2026, 10, 1, 12));
 }
 async function mountedRepositoryUi(repo, filename, name, props = {}) {
   const ui = createUiHarness({ repository: repo });

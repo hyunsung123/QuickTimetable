@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, Fragment, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { getRepository } from '@/lib/database';
 import { dateKey } from '@/lib/dates';
 import { TimetableActionError } from '@/lib/timetable';
@@ -29,6 +29,7 @@ interface CalendarContextValue extends Snapshot {
   setDefaultPreset: (id: string | null) => Promise<void>;
   deletePreset: (id: string) => Promise<void>;
   replacePreset: (id: string, source: TimetableImportSource) => Promise<void>;
+  resetData: () => Promise<void>;
 }
 
 const CalendarContext = createContext<CalendarContextValue | null>(null);
@@ -41,6 +42,8 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   const [attempt, setAttempt] = useState(0);
   const [selectedDate, setSelectedDate] = useState(dateKey());
   const [clipboard, setClipboard] = useState<EventClipboard | null>(null);
+  const resetting = useRef(false);
+  const [resetVersion, setResetVersion] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +58,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   const perform = useCallback(async (operation: (repo: CalendarRepository) => Promise<Snapshot>) => {
     try {
       const repo = await getRepository();
+      if (resetting.current) throw new TimetableActionError('초기화 중입니다. 잠시만 기다려 주세요.');
       const next = await operation(repo);
       setSnapshot(next);
       setError(null);
@@ -81,12 +85,30 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   const setDefaultPreset = useCallback(async (id: string | null) => { await perform(repo => repo.setDefaultPreset(id)); }, [perform]);
   const deletePreset = useCallback(async (id: string) => { await perform(repo => repo.deletePreset(id)); }, [perform]);
   const replacePreset = useCallback(async (id: string, source: TimetableImportSource) => { await perform(repo => repo.replacePreset(id, source)); }, [perform]);
+  const resetData = useCallback(async () => {
+    if (resetting.current) throw new TimetableActionError('초기화 중입니다. 잠시만 기다려 주세요.');
+    resetting.current = true;
+    try {
+      const repo = await getRepository();
+      const next = await repo.resetData();
+      setSnapshot(next);
+      setClipboard(null);
+      setSelectedDate(dateKey());
+      setError(null);
+      // Drop screen-local drafts, drag previews and navigation history only
+      // after commit. The Provider stays mounted with the committed empty data.
+      setResetVersion(value => value + 1);
+    } catch (cause) {
+      setError('초기화하지 못했습니다. 기존 데이터는 유지됩니다. 다시 시도해 주세요.');
+      throw cause;
+    } finally { resetting.current = false; }
+  }, []);
 
   return <CalendarContext.Provider value={{ ...snapshot, loading, initialized, error, selectedDate, setSelectedDate,
     retry: () => { setLoading(true); setAttempt(value => value + 1); }, clearError: () => setError(null),
     saveEvent, deleteEvent, saveTemplate, deleteTemplate, ensureWeek, clipboard, setClipboard,
     updateEventTimes, updateTemplateTimes, pasteEvent, pasteTemplate,
-    createPreset, renamePreset, setDefaultPreset, deletePreset, replacePreset }}>{children}</CalendarContext.Provider>;
+    createPreset, renamePreset, setDefaultPreset, deletePreset, replacePreset, resetData }}><Fragment key={resetVersion}>{children}</Fragment></CalendarContext.Provider>;
 }
 
 export function useCalendar() {

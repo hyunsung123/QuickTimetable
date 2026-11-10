@@ -19,7 +19,7 @@ for (const name of ['onBegin', 'onStart', 'onUpdate', 'onEnd', 'onFinalize']) {
   TestGesture.prototype[name] = function (callback) { this.callbacks[name] = callback; return this; };
 }
 
-function createUiHarness({ calendar, repository } = {}) {
+function createUiHarness({ calendar, repository, safeAreaInsets = { top: 44, bottom: 34, left: 0, right: 0 } } = {}) {
   const cache = new Map();
   const animations = [], sharedValues = [], navigation = [], focusCleanups = new Set();
   const View = React.forwardRef(function NativeView(props, ref) {
@@ -31,6 +31,15 @@ function createUiHarness({ calendar, repository } = {}) {
     StyleSheet: { create: value => value, hairlineWidth: 0.5, absoluteFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } },
     useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1 }), Platform: { OS: 'ios' },
   };
+  const TabContext = React.createContext(null);
+  function Tabs({ children, ...props }) {
+    const [selected, setSelected] = React.useState('calendar');
+    return React.createElement(TabContext.Provider, { value: { selected, setSelected } }, React.createElement('Tabs', props, children));
+  }
+  function TabTrigger({ name, href, children }) {
+    const { selected, setSelected } = React.useContext(TabContext);
+    return React.createElement('TabTrigger', { name, href }, React.cloneElement(children, { isFocused: selected === name, onPress: () => setSelected(name) }));
+  }
   const mocks = {
     'react-native': native,
     'react-native-gesture-handler': {
@@ -43,7 +52,8 @@ function createUiHarness({ calendar, repository } = {}) {
       useAnimatedStyle: callback => callback(), withSpring: value => { animations.push({ kind: 'spring', value }); return value; },
       withTiming: value => { animations.push({ kind: 'timing', value }); return value; }, cancelAnimation: () => {},
     },
-    'react-native-safe-area-context': { SafeAreaView: View, useSafeAreaInsets: () => ({ top: 44, bottom: 34, left: 0, right: 0 }) },
+    'react-native-safe-area-context': { SafeAreaView: View, useSafeAreaInsets: () => safeAreaInsets },
+    'expo-router/ui': { Tabs, TabList: View, TabSlot: 'TabSlot', TabTrigger },
     'expo-router': {
       router: Object.fromEntries(['push', 'replace', 'back'].map(method => [method, (...args) => navigation.push({ method, args })])),
       useFocusEffect: callback => React.useEffect(() => { const cleanup = callback(); if (cleanup) focusCleanups.add(cleanup); return () => { focusCleanups.delete(cleanup); cleanup?.(); }; }, [callback]),
