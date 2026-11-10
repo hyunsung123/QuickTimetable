@@ -42,3 +42,24 @@ export interface GridEvent {
   endMinute: number;
   color: string;
 }
+
+export interface EventClipboard {
+  title: string;
+  color: string;
+  durationMinute: number;
+}
+
+export interface EventTimeChange {
+  id: string;
+  startMinute: number;
+  endMinute: number;
+  previousStartMinute: number;
+  previousEndMinute: number;
+}
+
+export interface MenuAnchor {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}

@@ -1,5 +1,6 @@
-import type { CalendarEvent, EventInput, Snapshot, TemplateInput, TimetableTemplate } from '../types/calendar';
+import type { CalendarEvent, EventClipboard, EventInput, EventTimeChange, Snapshot, TemplateInput, TimetableTemplate } from '../types/calendar';
 import { addDays, mondayOf, parseDate } from './dates';
+import { overlaps, pastedEvent, TimetableActionError } from './timetable';
 
 type SqlValue = string | number | null;
 export interface DatabaseDriver {
@@ -63,6 +64,99 @@ export class CalendarRepository {
       events: await this.db.getAllAsync<CalendarEvent>('SELECT * FROM events ORDER BY date, startMinute, id'),
       templates: await this.db.getAllAsync<TimetableTemplate>('SELECT * FROM templates ORDER BY weekday, startMinute, id'),
     };
+  }
+
+  private async transaction(work: () => Promise<void>): Promise<Snapshot> {
+    await this.db.execAsync('BEGIN IMMEDIATE');
+    try {
+      await work();
+      const snapshot = await this.snapshot();
+      await this.db.execAsync('COMMIT');
+      return snapshot;
+    } catch (error) {
+      await this.db.execAsync('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** Only update existing rows. A stale drag must never resurrect deleted data.
+   * Both edge changes, their validation, and the returned snapshot are atomic. */
+  private updateTimes(table: 'events' | 'templates', changes: EventTimeChange[]): Promise<Snapshot> {
+    return this.serial(() => this.transaction(async () => {
+      if (changes.length < 1 || changes.length > 2 || new Set(changes.map(change => change.id)).size !== changes.length) {
+        throw new TimetableActionError('조절할 일정 경계선을 다시 선택해 주세요.');
+      }
+      const rows = await this.db.getAllAsync<CalendarEvent & TimetableTemplate>(`SELECT * FROM ${table}`);
+      const originals = changes.map(change => {
+        const row = rows.find(item => item.id === change.id);
+        if (!row || row.startMinute !== change.previousStartMinute || row.endMinute !== change.previousEndMinute) {
+          throw new TimetableActionError('일정이 변경되었습니다. 경계선을 다시 조절해 주세요.');
+        }
+        validateTime({ ...row, startMinute: change.startMinute, endMinute: change.endMinute });
+        return row;
+      });
+      const sameDay = (a: CalendarEvent & TimetableTemplate, b: CalendarEvent & TimetableTemplate) =>
+        a.calendarId === b.calendarId && (table === 'events' ? a.date === b.date : a.weekday === b.weekday);
+      const byId = new Map(changes.map(change => [change.id, change]));
+      if (originals.length === 2) {
+        const [upper, lower] = [...originals].sort((a, b) => a.startMinute - b.startMinute);
+        const nextUpper = byId.get(upper.id)!;
+        const nextLower = byId.get(lower.id)!;
+        if (!sameDay(upper, lower) || upper.endMinute > lower.startMinute || nextUpper.startMinute !== upper.startMinute ||
+            nextLower.endMinute !== lower.endMinute || nextUpper.endMinute !== nextLower.startMinute) {
+          throw new TimetableActionError('서로 마주 보는 경계선만 함께 조절할 수 있습니다.');
+        }
+      } else {
+        const [row] = originals;
+        const [change] = changes;
+        if (row.startMinute !== change.startMinute && row.endMinute !== change.endMinute) {
+          throw new TimetableActionError('한 번에 하나의 경계선만 조절할 수 있습니다.');
+        }
+      }
+      const proposed = rows.map(row => ({ ...row, ...byId.get(row.id) }));
+      for (const original of originals) {
+        const next = proposed.find(row => row.id === original.id)!;
+        if (proposed.some(row => row.id !== next.id && sameDay(next, row) && overlaps(next, row))) {
+          throw new TimetableActionError('겹치는 일정이 있어 경계선을 조절할 수 없습니다.');
+        }
+      }
+      const now = new Date().toISOString();
+      for (const change of changes) {
+        await this.db.runAsync(`UPDATE ${table} SET startMinute = ?, endMinute = ?, updatedAt = ? WHERE id = ?`,
+          change.startMinute, change.endMinute, now, change.id);
+      }
+    }));
+  }
+
+  updateEventTimes(changes: EventTimeChange[]) { return this.updateTimes('events', changes); }
+  updateTemplateTimes(changes: EventTimeChange[]) { return this.updateTimes('templates', changes); }
+
+  pasteEvent(clipboard: EventClipboard, date: string, startMinute: number): Promise<Snapshot> {
+    return this.serial(() => this.transaction(async () => {
+      parseDate(date);
+      const input = pastedEvent(clipboard, startMinute);
+      validateTime(input);
+      const conflicts = await this.db.getAllAsync(`SELECT id FROM events WHERE calendarId = 'personal' AND date = ? AND startMinute < ? AND endMinute > ?`, date, input.endMinute, startMinute);
+      if (conflicts.length) throw new TimetableActionError('해당 시간에 다른 일정이 있어 붙여넣기를 취소했습니다.');
+      const now = new Date().toISOString();
+      await this.db.runAsync(`INSERT INTO events (id, calendarId, title, date, startMinute, endMinute, color, createdAt, updatedAt, templateId)
+        VALUES (?, 'personal', ?, ?, ?, ?, ?, ?, ?, NULL)`,
+        newId(), input.title, date, startMinute, input.endMinute, input.color, now, now);
+    }));
+  }
+
+  pasteTemplate(clipboard: EventClipboard, weekday: number, startMinute: number): Promise<Snapshot> {
+    return this.serial(() => this.transaction(async () => {
+      if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new TimetableActionError('요일을 다시 선택해 주세요.');
+      const input = pastedEvent(clipboard, startMinute);
+      validateTime(input);
+      const conflicts = await this.db.getAllAsync(`SELECT id FROM templates WHERE calendarId = 'personal' AND weekday = ? AND startMinute < ? AND endMinute > ?`, weekday, input.endMinute, startMinute);
+      if (conflicts.length) throw new TimetableActionError('해당 시간에 다른 일정이 있어 붙여넣기를 취소했습니다.');
+      const now = new Date().toISOString();
+      await this.db.runAsync(`INSERT INTO templates (id, calendarId, title, weekday, startMinute, endMinute, color, createdAt, updatedAt)
+        VALUES (?, 'personal', ?, ?, ?, ?, ?, ?, ?)`,
+        newId(), input.title, weekday, startMinute, input.endMinute, input.color, now, now);
+    }));
   }
 
   initialize(): Promise<Snapshot> {

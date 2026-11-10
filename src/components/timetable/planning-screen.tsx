@@ -6,7 +6,7 @@ import { Action, Screen, ScreenHeader } from '@/components/ui/calendar-ui';
 import { eventColors, palette } from '@/constants/calendar';
 import { useCalendar } from '@/hooks/use-calendar';
 import { addDays, dateKey, mondayOf, monthTitle, weekdayOf, weekTitle } from '@/lib/dates';
-import type { GridEvent } from '@/types/calendar';
+import type { EventTimeChange, GridEvent } from '@/types/calendar';
 import { TimetableGrid } from './timetable-grid';
 
 export function PlanningScreen({ template = false }: { template?: boolean }) {
@@ -50,6 +50,12 @@ export function PlanningScreen({ template = false }: { template?: boolean }) {
     if (template) await calendar.saveTemplate({ ...value, weekday: value.day }, value.id);
     else await calendar.saveEvent({ ...value, date: addDays(week, value.day) }, value.id);
   };
+  const resize = (changes: EventTimeChange[]) => template ? calendar.updateTemplateTimes(changes) : calendar.updateEventTimes(changes);
+  const paste = async (day: number, minute: number) => {
+    if (!calendar.clipboard) return;
+    if (template) await calendar.pasteTemplate(calendar.clipboard, day, minute);
+    else await calendar.pasteEvent(calendar.clipboard, addDays(week, day), minute);
+  };
 
   return <Screen>
     <ScreenHeader title={template ? '기본 시간표' : '주간 계획'} subtitle={template ? '매주 반복할 나의 리듬' : monthTitle(selectedDate)} back={template}>
@@ -57,8 +63,8 @@ export function PlanningScreen({ template = false }: { template?: boolean }) {
     </ScreenHeader>
     {template ? <View style={styles.templateInfo}><Text style={styles.templateDescription}>아직 열지 않은 주에만 적용돼요.{ '\n' }이미 만들어 둔 주간 계획은 그대로 유지됩니다.</Text><Action label="+ 일정" onPress={() => create(selectedDay, 540)} /></View>
       : <View style={styles.nav}><Action label="‹" accessibilityLabel="이전 주" onPress={() => setSelectedDate(addDays(selectedDate, -7))} /><Text numberOfLines={1} style={styles.range}>{weekTitle(week)}</Text><Action label="›" accessibilityLabel="다음 주" onPress={() => setSelectedDate(addDays(selectedDate, 7))} /><Action label="이번 주" onPress={() => setSelectedDate(dateKey())} /></View>}
-    {template || readyWeek === week ? <TimetableGrid events={events} weekStart={template ? templateWeek : week} template={template} selectedDay={selectedDay}
-      onSelectDay={day => template ? setTemplateDay(day) : setSelectedDate(addDays(week, day))} onCreate={create} onEdit={edit} onChange={change} />
+    {template || readyWeek === week ? <TimetableGrid key={template ? 'template' : week} events={events} weekStart={template ? templateWeek : week} template={template} selectedDay={selectedDay}
+      onSelectDay={day => template ? setTemplateDay(day) : setSelectedDate(addDays(week, day))} onCreate={create} onEdit={edit} onChange={change} onResize={resize} onPaste={paste} />
       : <View style={styles.loading}>{failedWeek === week ? <><Text style={styles.templateDescription}>주간 계획을 불러오지 못했습니다.</Text><Action label="다시 시도" onPress={() => { void loadWeek(); }} /></> : <ActivityIndicator color={palette.blue} />}</View>}
     {draft && <EventEditor template={template} draft={draft} onClose={() => setDraft(null)} onSave={template ? calendar.saveTemplate : calendar.saveEvent} onDelete={template ? calendar.deleteTemplate : calendar.deleteEvent} />}
   </Screen>;

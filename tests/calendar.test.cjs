@@ -7,7 +7,9 @@ const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { CalendarRepository } = require('../.test-build/lib/repository');
 const dates = require('../.test-build/lib/dates');
-const { dragEvent, eventLanes } = require('../.test-build/lib/timetable');
+const { dragEvent, eventLanes, resizeBoundary, beginTimetableDrag, updateTimetableDrag, finishTimetableDrag, copyEvent, pastedEvent } = require('../.test-build/lib/timetable');
+const { BlockPressSession } = require('../.test-build/lib/timetable-press');
+const { contextMenuPosition } = require('../.test-build/lib/context-menu');
 
 function database(path = ':memory:') {
   const db = new DatabaseSync(path);
@@ -207,4 +209,263 @@ test('SQLite file reopen preserves events, templates, and deleted-instance initi
     first?.db.close(); reopened?.db.close();
     unlinkSync(file); rmdirSync(folder);
   }
+});
+
+const adjacent = [
+  { ...event, id: 'A', day: 0, startMinute: 540, endMinute: 600 },
+  { ...event, id: 'B', day: 0, startMinute: 600, endMinute: 660 },
+  { ...event, id: 'C', day: 0, startMinute: 660, endMinute: 720 },
+  { ...event, id: 'other-day', day: 1, startMinute: 540, endMinute: 660 },
+];
+const changedTimes = result => result.changes.map(({ id, startMinute, endMinute }) => ({ id, startMinute, endMinute }));
+
+test('shared bottom edge down grows A and shortens B, leaving outer edges and C fixed', () => {
+  const input = structuredClone(adjacent);
+  assert.deepEqual(changedTimes(resizeBoundary(input, 'A', 'end', 30)), [
+    { id: 'A', startMinute: 540, endMinute: 630 }, { id: 'B', startMinute: 630, endMinute: 660 },
+  ]);
+  assert.deepEqual(input, adjacent);
+});
+
+test('shared bottom edge up shortens A and grows B without opening a gap', () => {
+  assert.deepEqual(changedTimes(resizeBoundary(adjacent, 'A', 'end', -30)), [
+    { id: 'A', startMinute: 540, endMinute: 570 }, { id: 'B', startMinute: 570, endMinute: 660 },
+  ]);
+});
+
+test('dragging B top or A bottom produces exactly the same shared boundary', () => {
+  for (const delta of [-600, -30, 0, 30, 600]) {
+    assert.deepEqual(resizeBoundary(adjacent, 'A', 'end', delta).changes, resizeBoundary(adjacent, 'B', 'start', delta).changes);
+  }
+});
+
+test('shared boundary is snapped and cannot reduce either block below 30 minutes', () => {
+  assert.deepEqual(changedTimes(resizeBoundary(adjacent, 'A', 'end', 14)), []);
+  for (let delta = -600; delta <= 600; delta += 5) {
+    const result = resizeBoundary(adjacent, 'A', 'end', delta);
+    for (const change of result.changes) {
+      assert.equal(change.startMinute % 30, 0);
+      assert.equal(change.endMinute % 30, 0);
+      assert(change.endMinute - change.startMinute >= 30);
+      assert(change.startMinute >= 0 && change.endMinute <= 1440);
+    }
+  }
+  const shortB = [{ ...adjacent[0] }, { ...adjacent[1], endMinute: 630 }];
+  assert.deepEqual(resizeBoundary(shortB, 'A', 'end', 30).changes, []);
+});
+
+test('a gap permits independent resizing, then latches the neighbor on contact', () => {
+  const input = [adjacent[0], { ...adjacent[1], startMinute: 660, endMinute: 720 }, { ...adjacent[2], startMinute: 720, endMinute: 780 }];
+  assert.deepEqual(changedTimes(resizeBoundary(input, 'A', 'end', 30)), [{ id: 'A', startMinute: 540, endMinute: 630 }]);
+  const contact = resizeBoundary(input, 'A', 'end', 60);
+  assert.equal(contact.linkedId, 'B');
+  const beyond = resizeBoundary(input, 'A', 'end', 90, contact.linkedId);
+  assert.deepEqual(changedTimes(beyond), [{ id: 'A', startMinute: 540, endMinute: 690 }, { id: 'B', startMinute: 690, endMinute: 720 }]);
+  const reversed = resizeBoundary(input, 'A', 'end', 30, beyond.linkedId);
+  assert.deepEqual(changedTimes(reversed), [{ id: 'A', startMinute: 540, endMinute: 630 }, { id: 'B', startMinute: 630, endMinute: 720 }]);
+});
+
+test('top resizing across a gap also links the preceding block and fixes both outer ends', () => {
+  const input = [adjacent[0], { ...adjacent[1], startMinute: 660, endMinute: 720 }];
+  assert.deepEqual(changedTimes(resizeBoundary(input, 'B', 'start', -30)), [{ id: 'B', startMinute: 630, endMinute: 720 }]);
+  const contact = resizeBoundary(input, 'B', 'start', -60);
+  assert.equal(contact.linkedId, 'A');
+  assert.deepEqual(changedTimes(resizeBoundary(input, 'B', 'start', -90, contact.linkedId)), [
+    { id: 'A', startMinute: 540, endMinute: 570 }, { id: 'B', startMinute: 570, endMinute: 720 },
+  ]);
+});
+
+test('one fast update may cross a gap, but it never pushes a chain of blocks', () => {
+  const input = [adjacent[0], { ...adjacent[1], startMinute: 660, endMinute: 720 }, { ...adjacent[2], startMinute: 720, endMinute: 780 }];
+  assert.deepEqual(changedTimes(resizeBoundary(input, 'A', 'end', 9999)), [
+    { id: 'A', startMinute: 540, endMinute: 690 }, { id: 'B', startMinute: 690, endMinute: 720 },
+  ]);
+});
+
+test('ambiguous overlaps are preserved and resizing cannot cross them', () => {
+  const overlapping = [adjacent[0], { ...adjacent[1], startMinute: 570 }];
+  assert.deepEqual(resizeBoundary(overlapping, 'A', 'end', 30), { changes: [], blocked: true });
+  const ambiguous = [adjacent[0], adjacent[1], { ...adjacent[2], startMinute: 630 }];
+  for (const delta of [-30, 30, 300]) assert.deepEqual(resizeBoundary(ambiguous, 'A', 'end', delta), { changes: [], blocked: true });
+  const gap = [adjacent[0], { ...adjacent[1], startMinute: 660, endMinute: 720 }, { ...adjacent[2], startMinute: 660, endMinute: 750 }];
+  assert.deepEqual(changedTimes(resizeBoundary(gap, 'A', 'end', 120)), [{ id: 'A', startMinute: 540, endMinute: 660 }]);
+});
+
+test('a single block retains independent resizing at both day boundaries', () => {
+  assert.equal(resizeBoundary([adjacent[0]], 'A', 'start', -9999).changes[0].startMinute, 0);
+  assert.equal(resizeBoundary([adjacent[0]], 'A', 'end', 9999).changes[0].endMinute, 1440);
+});
+
+test('drag preview changes both blocks and cancel restores every original record', () => {
+  const start = beginTimetableDrag(adjacent, 'A', 'end');
+  const updated = updateTimetableDrag(start, 0, 44, 100, 44);
+  const preview = finishTimetableDrag(updated, true);
+  assert.equal(preview.events[0].endMinute, 630);
+  assert.equal(preview.events[1].startMinute, 630);
+  assert.deepEqual(preview.events.slice(2), adjacent.slice(2));
+  const cancelled = finishTimetableDrag(updated, false);
+  assert.deepEqual(cancelled.events, adjacent);
+  assert.deepEqual(cancelled.changes, []);
+  assert.deepEqual(start.original, adjacent);
+  const moved = updateTimetableDrag(beginTimetableDrag(adjacent, 'A', 'move'), 100, 44, 100, 44);
+  assert.equal(finishTimetableDrag(moved, true).movedEvent.day, 1);
+  assert.deepEqual(finishTimetableDrag(moved, false).events, adjacent);
+});
+
+test('hold release opens copy only after 350ms and actual dragging permanently suppresses it', () => {
+  const press = new BlockPressSession();
+  assert.equal(press.releaseHold(349, true), false);
+  assert.equal(press.releaseHold(350, true), true);
+  assert.equal(press.releaseHold(1000, false), false);
+  press.move(9, 0);
+  press.move(0, 0);
+  assert.equal(press.releaseHold(1000, true), false);
+  assert.equal(press.releaseTap(true), false);
+  press.reset();
+  press.move(1, 1);
+  assert.equal(press.releaseHold(500, true), true);
+  assert.equal(press.releaseTap(true), true);
+});
+
+test('copy payload has only title, color and duration, and paste preserves length at midnight', () => {
+  const clipboard = copyEvent({ ...adjacent[0], date: '2026-11-10', calendarId: 'personal' });
+  assert.deepEqual(clipboard, { title: '공부', color: '#426FD0', durationMinute: 60 });
+  assert.deepEqual(pastedEvent(clipboard, 1380), { title: '공부', color: '#426FD0', startMinute: 1380, endMinute: 1440 });
+  assert.throws(() => pastedEvent(clipboard, 1410));
+  assert.throws(() => pastedEvent({ ...clipboard, durationMinute: 15 }, 540));
+});
+
+test('context menu stays inside viewport and Safe Area at every screen edge', () => {
+  const viewport = { width: 320, height: 568 };
+  const insets = { top: 44, bottom: 34, left: 0, right: 0 };
+  for (const anchor of [
+    { x: -100, y: -100, width: 44, height: 44 }, { x: 300, y: 30, width: 100, height: 44 },
+    { x: 300, y: 550, width: 100, height: 44 }, { x: 50, y: 180, width: 100, height: 88 },
+  ]) {
+    const position = contextMenuPosition(anchor, viewport, insets);
+    assert(position.left >= 12 && position.left + 112 <= 308);
+    assert(position.top >= 52 && position.top + 44 <= 526);
+    assert(position.tailLeft >= 12 && position.tailLeft <= 88);
+  }
+  assert.equal(contextMenuPosition({ x: 50, y: 200, width: 100, height: 44 }, viewport, insets).placement, 'above');
+  assert.equal(contextMenuPosition({ x: 50, y: 50, width: 100, height: 44 }, viewport, insets).placement, 'below');
+});
+
+async function seedAdjacent(repo, template = false) {
+  for (const item of adjacent.slice(0, 3)) {
+    if (template) await repo.saveTemplate({ ...item, weekday: item.day }, item.id);
+    else await repo.saveEvent({ ...item, date: '2026-11-10' }, item.id);
+  }
+}
+
+test('SQLite shared resize changes only two time ranges and preserves all identities and metadata', async t => {
+  const { repo, db } = database(); t.after(() => db.close());
+  await repo.initialize(); await seedAdjacent(repo);
+  const before = await repo.initialize();
+  const changes = resizeBoundary(adjacent, 'A', 'end', 30).changes;
+  const after = await repo.updateEventTimes(changes);
+  assert.deepEqual(after.events.map(({ id, startMinute, endMinute }) => ({ id, startMinute, endMinute })), [
+    { id: 'A', startMinute: 540, endMinute: 630 }, { id: 'B', startMinute: 630, endMinute: 660 }, { id: 'C', startMinute: 660, endMinute: 720 },
+  ]);
+  for (const old of before.events) {
+    const next = after.events.find(item => item.id === old.id);
+    for (const field of ['id', 'calendarId', 'title', 'color', 'date', 'createdAt', 'templateId']) assert.equal(next[field], old[field]);
+  }
+});
+
+for (const template of [false, true]) {
+  test(`SQLite ${template ? 'template' : 'event'} resize rolls back first update when second update fails`, async t => {
+    const { repo, db, driver } = database(); t.after(() => db.close());
+    await repo.initialize(); await seedAdjacent(repo, template);
+    const before = await repo.initialize();
+    const originalRun = driver.runAsync;
+    let updates = 0;
+    driver.runAsync = async (sql, ...values) => {
+      if (sql.startsWith(`UPDATE ${template ? 'templates' : 'events'}`) && ++updates === 2) throw new Error('simulated write failure');
+      return originalRun(sql, ...values);
+    };
+    await assert.rejects(template ? repo.updateTemplateTimes(resizeBoundary(adjacent, 'A', 'end', 30).changes) : repo.updateEventTimes(resizeBoundary(adjacent, 'A', 'end', 30).changes));
+    assert.equal(updates, 2);
+    assert.deepEqual(await repo.initialize(), before);
+    driver.runAsync = originalRun;
+    const after = await (template ? repo.updateTemplateTimes(resizeBoundary(adjacent, 'A', 'end', 30).changes) : repo.updateEventTimes(resizeBoundary(adjacent, 'A', 'end', 30).changes));
+    assert.equal((template ? after.templates : after.events).find(item => item.id === 'A').endMinute, 630);
+  });
+}
+
+test('SQLite template resize leaves already generated dates and unrelated templates intact', async t => {
+  const { repo, db } = database(); t.after(() => db.close());
+  await repo.initialize(); await seedAdjacent(repo, true);
+  const before = await repo.ensureWeek('2026-11-09');
+  const after = await repo.updateTemplateTimes(resizeBoundary(adjacent, 'B', 'start', -30).changes);
+  assert.deepEqual(after.events, before.events);
+  assert.equal(after.templates.find(item => item.id === 'A').endMinute, 570);
+  assert.equal(after.templates.find(item => item.id === 'B').startMinute, 570);
+  assert.deepEqual(after.templates.find(item => item.id === 'C'), before.templates.find(item => item.id === 'C'));
+});
+
+test('stale/deleted rows, cross-date pairs and newly overlapping data reject the whole resize', async t => {
+  const { repo, db } = database(); t.after(() => db.close());
+  await repo.initialize(); await seedAdjacent(repo);
+  const changes = resizeBoundary(adjacent, 'A', 'end', 30).changes;
+  await repo.saveEvent({ ...base, date: '2026-11-10', startMinute: 510, endMinute: 600 }, 'A');
+  const stale = await repo.initialize();
+  await assert.rejects(repo.updateEventTimes(changes));
+  assert.deepEqual(await repo.initialize(), stale);
+  await repo.deleteEvent('A');
+  await assert.rejects(repo.updateEventTimes(changes));
+  assert.equal((await repo.initialize()).events.some(item => item.id === 'A'), false);
+  await repo.saveEvent({ ...base, date: '2026-11-10', startMinute: 540, endMinute: 600 }, 'A');
+  await repo.saveEvent({ ...base, date: '2026-11-11', startMinute: 600, endMinute: 660 }, 'B');
+  const crossDate = await repo.initialize();
+  await assert.rejects(repo.updateEventTimes(changes));
+  assert.deepEqual(await repo.initialize(), crossDate);
+  await repo.saveEvent({ ...base, date: '2026-11-10', startMinute: 600, endMinute: 660 }, 'B');
+  await repo.saveEvent({ ...base, date: '2026-11-10', startMinute: 600, endMinute: 630 }, 'overlap');
+  const overlap = await repo.initialize();
+  await assert.rejects(repo.updateEventTimes(changes));
+  assert.deepEqual(await repo.initialize(), overlap);
+});
+
+test('repeated paste gives new IDs, keeps the source, and never overwrites colliding events', async t => {
+  const { repo, db } = database(); t.after(() => db.close());
+  await repo.initialize(); await repo.saveEvent({ ...base, date: '2026-11-10' }, 'source');
+  const before = (await repo.initialize()).events[0];
+  const clipboard = copyEvent(before);
+  await repo.pasteEvent(clipboard, '2026-11-11', 600);
+  const after = await repo.pasteEvent(clipboard, '2026-11-11', 720);
+  assert.equal(new Set(after.events.map(item => item.id)).size, 3);
+  assert.deepEqual(after.events.find(item => item.id === 'source'), before);
+  for (const item of after.events.filter(item => item.id !== 'source')) {
+    assert.equal(item.endMinute - item.startMinute, clipboard.durationMinute);
+    assert.equal(item.title, before.title); assert.equal(item.color, before.color);
+    assert.equal(item.templateId, null);
+  }
+  for (const start of [570, 600, 630, 690]) await assert.rejects(repo.pasteEvent(clipboard, '2026-11-11', start));
+  assert.deepEqual(await repo.initialize(), after);
+  await assert.rejects(repo.pasteEvent(clipboard, '2026-11-11', 1410));
+  assert.deepEqual(await repo.initialize(), after);
+});
+
+test('concurrent pastes recheck collisions in their transaction and produce only one new row', async t => {
+  const { repo, db } = database(); t.after(() => db.close());
+  await repo.initialize();
+  const results = await Promise.allSettled([repo.pasteEvent(copyEvent(adjacent[0]), '2026-11-10', 540), repo.pasteEvent(copyEvent(adjacent[0]), '2026-11-10', 540)]);
+  assert.equal(results.filter(item => item.status === 'fulfilled').length, 1);
+  assert.equal((await repo.initialize()).events.length, 1);
+});
+
+test('template paste checks template collisions, retains copies and leaves dated events unchanged', async t => {
+  const { repo, db } = database(); t.after(() => db.close());
+  await repo.initialize(); await repo.saveTemplate(base, 'source');
+  const before = await repo.ensureWeek('2026-11-09');
+  const clipboard = copyEvent(before.templates[0]);
+  let after = await repo.pasteTemplate(clipboard, 1, 540);
+  after = await repo.pasteTemplate(clipboard, 2, 540);
+  assert.equal(after.templates.length, 3);
+  assert.equal(new Set(after.templates.map(item => item.id)).size, 3);
+  assert.deepEqual(after.events, before.events);
+  assert.deepEqual(after.templates.find(item => item.id === 'source'), before.templates[0]);
+  await assert.rejects(repo.pasteTemplate(clipboard, 1, 570));
+  assert.deepEqual(await repo.initialize(), after);
 });

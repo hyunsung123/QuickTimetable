@@ -10,5 +10,5 @@
     "outDir": ".test-build",
     "rootDir": "src"
   },
-  "include": ["src/types/calendar.ts", "src/lib/dates.ts", "src/lib/timetable.ts", "src/lib/repository.ts"]
+  "include": ["src/types/calendar.ts", "src/lib/dates.ts", "src/lib/timetable.ts", "src/lib/timetable-press.ts", "src/lib/context-menu.ts", "src/lib/repository.ts"]
 }

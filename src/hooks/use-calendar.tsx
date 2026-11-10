@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { getRepository } from '@/lib/database';
 import { dateKey } from '@/lib/dates';
+import { TimetableActionError } from '@/lib/timetable';
 import type { CalendarRepository } from '@/lib/repository';
-import type { EventInput, Snapshot, TemplateInput } from '@/types/calendar';
+import type { EventClipboard, EventInput, EventTimeChange, Snapshot, TemplateInput } from '@/types/calendar';
 
 interface CalendarContextValue extends Snapshot {
   loading: boolean;
@@ -17,6 +18,12 @@ interface CalendarContextValue extends Snapshot {
   saveTemplate: (input: TemplateInput, id?: string) => Promise<void>;
   deleteTemplate: (id: string) => Promise<void>;
   ensureWeek: (date: string) => Promise<void>;
+  clipboard: EventClipboard | null;
+  setClipboard: (clipboard: EventClipboard) => void;
+  updateEventTimes: (changes: EventTimeChange[]) => Promise<void>;
+  updateTemplateTimes: (changes: EventTimeChange[]) => Promise<void>;
+  pasteEvent: (clipboard: EventClipboard, date: string, startMinute: number) => Promise<void>;
+  pasteTemplate: (clipboard: EventClipboard, weekday: number, startMinute: number) => Promise<void>;
 }
 
 const CalendarContext = createContext<CalendarContextValue | null>(null);
@@ -28,6 +35,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [selectedDate, setSelectedDate] = useState(dateKey());
+  const [clipboard, setClipboard] = useState<EventClipboard | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,7 +54,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
       setSnapshot(next);
       setError(null);
     } catch (cause) {
-      setError('변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.');
+      if (!(cause instanceof TimetableActionError)) setError('변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.');
       throw cause;
     }
   }, []);
@@ -55,10 +63,15 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   const saveTemplate = useCallback((input: TemplateInput, id?: string) => perform(repo => repo.saveTemplate(input, id)), [perform]);
   const deleteTemplate = useCallback((id: string) => perform(repo => repo.deleteTemplate(id)), [perform]);
   const ensureWeek = useCallback((date: string) => perform(repo => repo.ensureWeek(date)), [perform]);
+  const updateEventTimes = useCallback((changes: EventTimeChange[]) => perform(repo => repo.updateEventTimes(changes)), [perform]);
+  const updateTemplateTimes = useCallback((changes: EventTimeChange[]) => perform(repo => repo.updateTemplateTimes(changes)), [perform]);
+  const pasteEvent = useCallback((value: EventClipboard, date: string, start: number) => perform(repo => repo.pasteEvent(value, date, start)), [perform]);
+  const pasteTemplate = useCallback((value: EventClipboard, day: number, start: number) => perform(repo => repo.pasteTemplate(value, day, start)), [perform]);
 
   return <CalendarContext.Provider value={{ ...snapshot, loading, initialized, error, selectedDate, setSelectedDate,
     retry: () => { setLoading(true); setAttempt(value => value + 1); }, clearError: () => setError(null),
-    saveEvent, deleteEvent, saveTemplate, deleteTemplate, ensureWeek }}>{children}</CalendarContext.Provider>;
+    saveEvent, deleteEvent, saveTemplate, deleteTemplate, ensureWeek, clipboard, setClipboard,
+    updateEventTimes, updateTemplateTimes, pasteEvent, pasteTemplate }}>{children}</CalendarContext.Provider>;
 }
 
 export function useCalendar() {
