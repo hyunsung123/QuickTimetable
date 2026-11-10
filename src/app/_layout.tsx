@@ -1,18 +1,17 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
-import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { StorageGate } from '@/components/ui/calendar-ui';
+import { CalendarProvider } from '@/hooks/use-calendar';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
-
-SplashScreen.preventAutoHideAsync();
-
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
-  return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
-    </ThemeProvider>
-  );
+export default function RootLayout() {
+  return <GestureHandlerRootView style={{ flex: 1 }}><SafeAreaProvider><CalendarProvider>
+    <StatusBar style="dark" />
+    <StorageGate><Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: '#FFF' } }}>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="settings" />
+      <Stack.Screen name="default-timetable" />
+    </Stack></StorageGate>
+  </CalendarProvider></SafeAreaProvider></GestureHandlerRootView>;
 }

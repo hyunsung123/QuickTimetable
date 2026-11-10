@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": [],
+    "outDir": ".test-build",
+    "rootDir": "src"
+  },
+  "include": ["src/types/calendar.ts", "src/lib/dates.ts", "src/lib/timetable.ts", "src/lib/repository.ts"]
+}
