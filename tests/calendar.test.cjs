@@ -9,7 +9,7 @@ const { CalendarRepository } = require('../.test-build/lib/repository');
 const dates = require('../.test-build/lib/dates');
 const { dragEvent, eventLanes, resizeBoundary, beginTimetableDrag, updateTimetableDrag, finishTimetableDrag, copyEvent, pastedEvent } = require('../.test-build/lib/timetable');
 const { BlockPressSession } = require('../.test-build/lib/timetable-press');
-const { contextMenuPosition } = require('../.test-build/lib/context-menu');
+const { contextMenuPosition, contextMenuSize } = require('../.test-build/lib/context-menu');
 
 function database(path = ':memory:') {
   const db = new DatabaseSync(path);
@@ -338,14 +338,15 @@ test('copy payload has only title, color and duration, and paste preserves lengt
 test('context menu stays inside viewport and Safe Area at every screen edge', () => {
   const viewport = { width: 320, height: 568 };
   const insets = { top: 44, bottom: 34, left: 0, right: 0 };
-  for (const anchor of [
+  for (const labels of [['복사', '삭제'], ['붙여넣기']]) for (const fontScale of [1, 1.4]) for (const anchor of [
     { x: -100, y: -100, width: 44, height: 44 }, { x: 300, y: 30, width: 100, height: 44 },
     { x: 300, y: 550, width: 100, height: 44 }, { x: 50, y: 180, width: 100, height: 88 },
   ]) {
-    const position = contextMenuPosition(anchor, viewport, insets);
-    assert(position.left >= 12 && position.left + 112 <= 308);
-    assert(position.top >= 52 && position.top + 44 <= 526);
-    assert(position.tailLeft >= 12 && position.tailLeft <= 88);
+    const size = contextMenuSize(labels, fontScale);
+    const position = contextMenuPosition(anchor, viewport, insets, size.width, size.height);
+    assert(position.left >= 12 && position.left + size.width <= 308);
+    assert(position.top >= 52 && position.top + size.height <= 526);
+    assert(position.tailLeft >= 12 && position.tailLeft <= size.width - 24);
   }
   assert.equal(contextMenuPosition({ x: 50, y: 200, width: 100, height: 44 }, viewport, insets).placement, 'above');
   assert.equal(contextMenuPosition({ x: 50, y: 50, width: 100, height: 44 }, viewport, insets).placement, 'below');

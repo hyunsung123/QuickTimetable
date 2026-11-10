@@ -1,2 +1,2 @@
-import { PlanningScreen } from '@/components/timetable/planning-screen';
-export default function DefaultTimetableScreen() { return <PlanningScreen template />; }
+import { PresetList } from '@/components/timetable/preset-list';
+export default function DefaultTimetableScreen() { return <PresetList />; }

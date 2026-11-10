@@ -1,7 +1,12 @@
 import type { MenuAnchor } from '../types/calendar';
 import { clamp } from './timetable';
 
-export function contextMenuPosition(anchor: MenuAnchor, viewport: { width: number; height: number }, insets: { top: number; bottom: number; left: number; right: number }, menuWidth = 112, menuHeight = 44) {
+export function contextMenuSize(labels: string[], fontScale = 1) {
+  const scale = Math.max(1, Math.min(fontScale, 1.4));
+  return { width: labels.reduce((width, label) => width + label.length * 15 * scale + 24, 0) + Math.max(0, labels.length - 1), height: Math.max(38, Math.ceil(24 * scale + 14)) };
+}
+
+export function contextMenuPosition(anchor: MenuAnchor, viewport: { width: number; height: number }, insets: { top: number; bottom: number; left: number; right: number }, menuWidth = 109, menuHeight = 38) {
   const minX = insets.left + 12;
   const maxX = Math.max(minX, viewport.width - insets.right - menuWidth - 12);
   const minY = insets.top + 8;

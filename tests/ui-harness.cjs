@@ -21,14 +21,15 @@ for (const name of ['onBegin', 'onStart', 'onUpdate', 'onEnd', 'onFinalize']) {
 
 function createUiHarness({ calendar, repository } = {}) {
   const cache = new Map();
+  const animations = [], sharedValues = [], navigation = [], focusCleanups = new Set();
   const View = React.forwardRef(function NativeView(props, ref) {
     React.useImperativeHandle(ref, () => ({ measureInWindow: callback => callback(80, 240, 100, 88), scrollTo: () => {} }), []);
     return React.createElement('View', props, props.children);
   });
   const native = {
-    View, ScrollView: View, Text: 'Text', Pressable: 'Pressable', Modal: 'Modal', ActivityIndicator: 'ActivityIndicator',
-    StyleSheet: { create: value => value, absoluteFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } },
-    useWindowDimensions: () => ({ width: 390, height: 844 }), Platform: { OS: 'ios' },
+    View, ScrollView: View, KeyboardAvoidingView: View, Text: 'Text', TextInput: 'TextInput', Pressable: 'Pressable', Modal: 'Modal', ActivityIndicator: 'ActivityIndicator',
+    StyleSheet: { create: value => value, hairlineWidth: 0.5, absoluteFill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } },
+    useWindowDimensions: () => ({ width: 390, height: 844, fontScale: 1 }), Platform: { OS: 'ios' },
   };
   const mocks = {
     'react-native': native,
@@ -36,9 +37,17 @@ function createUiHarness({ calendar, repository } = {}) {
       GestureDetector: 'GestureDetector',
       Gesture: Object.fromEntries(['Pan', 'LongPress', 'Tap', 'Native', 'Simultaneous', 'Exclusive'].map(kind => [kind, (...gestures) => new TestGesture(kind, gestures)])),
     },
-    'react-native-reanimated': { __esModule: true, default: { View }, useSharedValue: value => React.useMemo(() => ({ value }), []), useAnimatedStyle: callback => callback() },
-    'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 44, bottom: 34, left: 0, right: 0 }) },
-    'expo-router': { useFocusEffect: callback => React.useEffect(callback, [callback]) },
+    'react-native-reanimated': {
+      __esModule: true, default: { View },
+      useSharedValue: value => React.useMemo(() => { const shared = { value, set(next) { this.value = next; }, get() { return this.value; } }; sharedValues.push(shared); return shared; }, []),
+      useAnimatedStyle: callback => callback(), withSpring: value => { animations.push({ kind: 'spring', value }); return value; },
+      withTiming: value => { animations.push({ kind: 'timing', value }); return value; }, cancelAnimation: () => {},
+    },
+    'react-native-safe-area-context': { SafeAreaView: View, useSafeAreaInsets: () => ({ top: 44, bottom: 34, left: 0, right: 0 }) },
+    'expo-router': {
+      router: Object.fromEntries(['push', 'replace', 'back'].map(method => [method, (...args) => navigation.push({ method, args })])),
+      useFocusEffect: callback => React.useEffect(() => { const cleanup = callback(); if (cleanup) focusCleanups.add(cleanup); return () => { focusCleanups.delete(cleanup); cleanup?.(); }; }, [callback]),
+    },
     '@/lib/haptics': { selectionHaptic: () => {} },
     '@/lib/database': { getRepository: async () => repository },
     ...(calendar ? { '@/hooks/use-calendar': { useCalendar: () => calendar } } : {}),
@@ -68,7 +77,7 @@ function createUiHarness({ calendar, repository } = {}) {
     instance._compile(compiled, path);
     return instance.exports;
   }
-  return { React, TestRenderer, load };
+  return { React, TestRenderer, load, animations, sharedValues, navigation, blur: () => { for (const cleanup of focusCleanups) cleanup(); } };
 }
 
 module.exports = { createUiHarness };

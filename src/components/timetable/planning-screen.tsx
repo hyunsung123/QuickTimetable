@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { router, useFocusEffect } from 'expo-router';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { EventEditor, type EditorDraft } from '@/components/events/event-editor';
@@ -9,8 +9,10 @@ import { addDays, dateKey, mondayOf, monthTitle, weekdayOf, weekTitle } from '@/
 import type { EventTimeChange, GridEvent } from '@/types/calendar';
 import { TimetableGrid } from './timetable-grid';
 
-export function PlanningScreen({ template = false }: { template?: boolean }) {
+export function PlanningScreen({ presetId, headerAction, templateToolbar }: { presetId?: string; headerAction?: ReactNode; templateToolbar?: ReactNode }) {
+  const template = presetId !== undefined;
   const calendar = useCalendar();
+  const preset = calendar.presets.find(value => value.id === presetId);
   const { selectedDate, setSelectedDate, ensureWeek } = calendar;
   const [templateDay, setTemplateDay] = useState(0);
   const [draft, setDraft] = useState<EditorDraft | null>(null);
@@ -32,14 +34,15 @@ export function PlanningScreen({ template = false }: { template?: boolean }) {
     return () => { alive = false; };
   }, [template, loadWeek]));
 
-  const events: GridEvent[] = template ? calendar.templates.map(item => ({ ...item, day: item.weekday }))
+  const templateEvents = calendar.templates.filter(item => item.presetId === presetId);
+  const events: GridEvent[] = template ? templateEvents.map(item => ({ ...item, day: item.weekday }))
     : calendar.events.filter(item => item.date >= week && item.date < addDays(week, 7)).map(item => ({ ...item, day: weekdayOf(item.date) }));
   const create = (day: number, startMinute: number) => {
     setDraft({ title: '', date: addDays(template ? templateWeek : week, day), weekday: day, startMinute, endMinute: startMinute + 30, color: eventColors[0] });
   };
   const edit = (id: string) => {
     if (template) {
-      const item = calendar.templates.find(value => value.id === id);
+      const item = templateEvents.find(value => value.id === id);
       if (item) setDraft({ ...item, date: addDays(templateWeek, item.weekday) });
     } else {
       const item = calendar.events.find(value => value.id === id);
@@ -47,30 +50,31 @@ export function PlanningScreen({ template = false }: { template?: boolean }) {
     }
   };
   const change = async (value: GridEvent) => {
-    if (template) await calendar.saveTemplate({ ...value, weekday: value.day }, value.id);
+    if (template) await calendar.saveTemplate({ ...value, weekday: value.day }, value.id, presetId);
     else await calendar.saveEvent({ ...value, date: addDays(week, value.day) }, value.id);
   };
-  const resize = (changes: EventTimeChange[]) => template ? calendar.updateTemplateTimes(changes) : calendar.updateEventTimes(changes);
+  const resize = (changes: EventTimeChange[]) => template ? calendar.updateTemplateTimes(changes, presetId) : calendar.updateEventTimes(changes);
+  const remove = (id: string) => template ? calendar.deleteTemplate(id, presetId) : calendar.deleteEvent(id);
   const paste = async (day: number, minute: number) => {
     if (!calendar.clipboard) return;
-    if (template) await calendar.pasteTemplate(calendar.clipboard, day, minute);
+    if (template) await calendar.pasteTemplate(calendar.clipboard, day, minute, presetId);
     else await calendar.pasteEvent(calendar.clipboard, addDays(week, day), minute);
   };
 
   return <Screen>
-    <ScreenHeader title={template ? '기본 시간표' : '주간 계획'} subtitle={template ? '매주 반복할 나의 리듬' : monthTitle(selectedDate)} back={template}>
-      {!template && <Action label="설정" onPress={() => router.push('/settings')} />}
+    <ScreenHeader title={template ? preset?.name ?? '시간표' : '주간 계획'} subtitle={template ? preset?.isDefault ? '기본 시간표' : undefined : monthTitle(selectedDate)} back={template}>
+      {template ? headerAction : <Action label="설정" onPress={() => router.push('/settings')} />}
     </ScreenHeader>
-    {template ? <View style={styles.templateInfo}><Text style={styles.templateDescription}>아직 열지 않은 주에만 적용돼요.{ '\n' }이미 만들어 둔 주간 계획은 그대로 유지됩니다.</Text><Action label="+ 일정" onPress={() => create(selectedDay, 540)} /></View>
+    {template ? <View style={styles.templateInfo}>{templateToolbar}<Action label="+" accessibilityLabel="일정 추가" onPress={() => create(selectedDay, 540)} /></View>
       : <View style={styles.nav}><Action label="‹" accessibilityLabel="이전 주" onPress={() => setSelectedDate(addDays(selectedDate, -7))} /><Text numberOfLines={1} style={styles.range}>{weekTitle(week)}</Text><Action label="›" accessibilityLabel="다음 주" onPress={() => setSelectedDate(addDays(selectedDate, 7))} /><Action label="이번 주" onPress={() => setSelectedDate(dateKey())} /></View>}
-    {template || readyWeek === week ? <TimetableGrid key={template ? 'template' : week} events={events} weekStart={template ? templateWeek : week} template={template} selectedDay={selectedDay}
-      onSelectDay={day => template ? setTemplateDay(day) : setSelectedDate(addDays(week, day))} onCreate={create} onEdit={edit} onChange={change} onResize={resize} onPaste={paste} />
+    {template || readyWeek === week ? <TimetableGrid key={template ? presetId : week} events={events} weekStart={template ? templateWeek : week} template={template} selectedDay={selectedDay}
+      onSelectDay={day => template ? setTemplateDay(day) : setSelectedDate(addDays(week, day))} onCreate={create} onEdit={edit} onChange={change} onResize={resize} onPaste={paste} onDelete={remove} />
       : <View style={styles.loading}>{failedWeek === week ? <><Text style={styles.templateDescription}>주간 계획을 불러오지 못했습니다.</Text><Action label="다시 시도" onPress={() => { void loadWeek(); }} /></> : <ActivityIndicator color={palette.blue} />}</View>}
-    {draft && <EventEditor template={template} draft={draft} onClose={() => setDraft(null)} onSave={template ? calendar.saveTemplate : calendar.saveEvent} onDelete={template ? calendar.deleteTemplate : calendar.deleteEvent} />}
+    {draft && <EventEditor template={template} draft={draft} onClose={() => setDraft(null)} onSave={template ? (value, id) => calendar.saveTemplate(value, id, presetId) : calendar.saveEvent} onDelete={remove} />}
   </Screen>;
 }
 
 const styles = StyleSheet.create({
   nav: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingBottom: 12 }, range: { flex: 1, fontSize: 11, color: palette.text, textAlign: 'center' },
-  templateInfo: { paddingHorizontal: 20, paddingBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }, templateDescription: { flex: 1, color: palette.muted, fontSize: 11, lineHeight: 18 }, loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  templateInfo: { paddingHorizontal: 12, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 4 }, templateDescription: { color: palette.muted, fontSize: 11, lineHeight: 18 }, loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
 });

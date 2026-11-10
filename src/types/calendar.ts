@@ -24,6 +24,7 @@ export interface TemplateInput {
 
 export interface TimetableTemplate extends TemplateInput {
   id: string;
+  presetId: string;
   calendarId: string;
   createdAt: string;
   updatedAt: string;
@@ -32,7 +33,18 @@ export interface TimetableTemplate extends TemplateInput {
 export interface Snapshot {
   events: CalendarEvent[];
   templates: TimetableTemplate[];
+  presets: TimetablePreset[];
 }
+
+export interface TimetablePreset {
+  id: string;
+  name: string;
+  isDefault: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TimetableImportSource = { kind: 'week'; weekStart: string } | { kind: 'preset'; presetId: string };
 
 export interface GridEvent {
   id: string;

@@ -19,12 +19,14 @@ const gridHeight = slotHeight * 48;
 
 type ContextTarget = { kind: 'copy'; id: string; anchor: MenuAnchor } | { kind: 'paste'; day: number; minute: number; anchor: MenuAnchor };
 
-export function TimetableGrid({ events, weekStart, template = false, selectedDay, onSelectDay, onCreate, onEdit, onChange, onResize, onPaste }: {
+export function TimetableGrid({ events, weekStart, template = false, readOnly = false, selectedDay, onSelectDay, onCreate, onEdit, onChange, onResize, onPaste, onDelete }: {
   events: GridEvent[]; weekStart: string; template?: boolean; selectedDay: number;
+  readOnly?: boolean;
   onSelectDay: (day: number) => void; onCreate: (day: number, minute: number) => void;
   onEdit: (id: string) => void; onChange: (event: GridEvent) => Promise<void>;
   onResize: (changes: EventTimeChange[]) => Promise<void>;
   onPaste: (day: number, minute: number) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
 }) {
   const [width, setWidth] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -66,10 +68,10 @@ export function TimetableGrid({ events, weekStart, template = false, selectedDay
     horizontal.current?.scrollTo({ x: Math.max(0, x), animated: true });
   }, [expanded, selectedDay, width, dayWidth]);
 
-  const backgroundTap = Gesture.Tap().enabled(!busy && !dragging).maxDuration(holdDurationMs - 1).maxDistance(pressMovementTolerance).runOnJS(true).onEnd((event, success) => {
+  const backgroundTap = Gesture.Tap().enabled(!readOnly && !busy && !dragging).maxDuration(holdDurationMs - 1).maxDistance(pressMovementTolerance).runOnJS(true).onEnd((event, success) => {
     if (success) onCreate(clamp(Math.floor(event.x / dayWidth), 0, 6), clamp(Math.floor(event.y / slotHeight), 0, 47) * 30);
   });
-  const backgroundHold = Gesture.LongPress().enabled(!!clipboard && !busy && !dragging).minDuration(holdDurationMs).maxDistance(pressMovementTolerance).numberOfPointers(1).runOnJS(true)
+  const backgroundHold = Gesture.LongPress().enabled(!readOnly && !!clipboard && !busy && !dragging).minDuration(holdDurationMs).maxDistance(pressMovementTolerance).numberOfPointers(1).runOnJS(true)
     .blocksExternalGesture(...scrollGestures)
     .onEnd((event, success) => {
       if (!success) return;
@@ -95,20 +97,26 @@ export function TimetableGrid({ events, weekStart, template = false, selectedDay
     catch (error) { showError(error); }
     finally { pasteLock.current = false; setPasting(false); }
   };
+  const deleteAction = async () => {
+    if (menu?.kind !== 'copy' || pasteLock.current) return;
+    const id = menu.id;
+    pasteLock.current = true;
+    setPasting(true);
+    try { await onDelete(id); selectionHaptic(); }
+    catch (error) { showError(error); }
+    finally { setMenu(null); pasteLock.current = false; setPasting(false); }
+  };
 
   return <View style={styles.container} onLayout={e => setWidth(e.nativeEvent.layout.width)}>
     <View style={styles.viewToolbar}>
       <View style={styles.segmented}>{[false, true].map(value => <Pressable key={String(value)} accessibilityRole="button" accessibilityState={{ selected: expanded === value }} onPress={() => setExpanded(value)} style={[styles.segment, expanded === value && styles.segmentActive]}><Text style={[styles.segmentText, expanded === value && { color: palette.blue }]}>{value ? '확대 편집' : '주 전체'}</Text></Pressable>)}</View>
       <Text style={styles.modeHint}>{expanded ? '좌우로 밀어 요일 이동' : '월요일 – 일요일'}</Text>
     </View>
-    <View style={styles.daysBar}>
-      {weekdays.map((day, i) => <Pressable key={day} accessibilityRole="button" accessibilityLabel={`${day}요일 선택`} accessibilityState={{ selected: selectedDay === i }} onPress={() => { onSelectDay(i); if (!expanded) setExpanded(true); }} style={[styles.dayButton, selectedDay === i && { backgroundColor: palette.blueLight }]}><Text style={[styles.dayButtonText, selectedDay === i && { color: palette.blue, fontWeight: '700' }]}>{day}</Text></Pressable>)}
-    </View>
     {width > rulerWidth && <>
       <View style={styles.header}>
         <View style={{ width: rulerWidth }}><Text style={styles.rulerTitle}>시간</Text></View>
         <View style={styles.headerWindow}><Animated.View style={[{ width: dayWidth * 7, flexDirection: 'row' }, headerStyle]}>
-          {dates.map((date, i) => <Pressable accessibilityRole="button" onPress={() => onSelectDay(i)} key={date} style={[styles.columnHeader, { width: dayWidth }, selectedDay === i && { backgroundColor: palette.blueLight }]}>
+          {dates.map((date, i) => <Pressable accessibilityRole="button" accessibilityLabel={`${weekdays[i]}요일 선택`} accessibilityState={{ selected: selectedDay === i }} onPress={() => { onSelectDay(i); setExpanded(true); }} key={date} style={[styles.columnHeader, { width: dayWidth }, selectedDay === i && { backgroundColor: palette.blueLight }]}>
             <Text style={[styles.columnDay, i === 6 && { color: palette.red }]}>{weekdays[i]}</Text>
             {!template && <Text style={[styles.columnDate, date === today && styles.todayDate]}>{parseDate(date).getDate()}</Text>}
           </Pressable>)}
@@ -134,8 +142,8 @@ export function TimetableGrid({ events, weekStart, template = false, selectedDay
                   </GestureDetector>
                   {visibleEvents.map(event => <EventBlock key={event.id} event={event} dayWidth={dayWidth} {...(lanes.get(event.id) ?? { lane: 0, lanes: 1 })} scrollGestures={scrollGestures} onEdit={onEdit}
                     active={event.id === drag.activeId && drag.activeMode === 'move'} selected={menu?.kind === 'copy' && menu.id === event.id}
-                    disabled={busy || dragging && drag.activeId !== event.id}
-                    onCopy={(id, anchor) => { setMenu({ kind: 'copy', id, anchor }); selectionHaptic(); }}
+                    disabled={readOnly || busy || dragging && drag.activeId !== event.id}
+                    onCopy={(id, anchor) => setMenu({ kind: 'copy', id, anchor })}
                     onBegin={(id, mode) => { setMenu(null); setNotice(''); return drag.begin(id, mode); }} onUpdate={drag.update} onEnd={drag.end} />)}
                 </View>
               </ScrollView>
@@ -145,8 +153,8 @@ export function TimetableGrid({ events, weekStart, template = false, selectedDay
       </View>
     </>}
     {!!notice && <View accessibilityRole="alert" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text><Pressable accessibilityRole="button" accessibilityLabel="안내 닫기" onPress={() => setNotice('')} style={styles.noticeClose}><Text style={{ color: palette.blue }}>닫기</Text></Pressable></View>}
-    <View style={styles.footer}><Text style={styles.footerText}>{drag.blocked ? '겹치는 일정이 있어 이 경계선은 더 조절할 수 없어요.' : dragging ? previewTime || '30분 단위로 조절 중 · 놓으면 저장' : busy ? '저장 중…' : '길게 눌러 복사 · 누른 채 이동 · 맞닿은 경계선 함께 조절'}</Text></View>
-    {menu && <TimetableContextMenu label={menu.kind === 'copy' ? '복사' : '붙여넣기'} anchor={menu.anchor} onPress={() => { void menuAction(); }} onClose={() => setMenu(null)} />}
+    <View style={styles.footer}><Text style={styles.footerText}>{readOnly ? '미리보기' : drag.blocked ? '겹치는 일정이 있어 이 경계선은 더 조절할 수 없어요.' : dragging ? previewTime || '30분 단위로 조절 중 · 놓으면 저장' : busy ? '저장 중…' : '길게 눌러 복사·삭제 · 누른 채 이동 · 경계선 조절'}</Text></View>
+    {menu && <TimetableContextMenu kind={menu.kind} anchor={menu.anchor} onCopy={() => { void menuAction(); }} onPaste={() => { void menuAction(); }} onDelete={deleteAction} onClose={() => { if (!pasteLock.current) setMenu(null); }} />}
   </View>;
 }
 
@@ -154,7 +162,6 @@ const styles = StyleSheet.create({
   container: { flex: 1 }, viewToolbar: { paddingHorizontal: 20, paddingBottom: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   segmented: { flexDirection: 'row', backgroundColor: palette.surface, padding: 3, borderRadius: 9 }, segment: { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 7 },
   segmentActive: { backgroundColor: '#FFF' }, segmentText: { fontSize: 12, color: palette.muted, fontWeight: '600' }, modeHint: { color: palette.muted, fontSize: 10 },
-  daysBar: { flexDirection: 'row', paddingHorizontal: 20, gap: 5, paddingBottom: 12 }, dayButton: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 36, borderRadius: 7 }, dayButtonText: { color: palette.muted, fontSize: 12 },
   header: { flexDirection: 'row', borderTopWidth: 1, borderBottomWidth: 1, borderColor: palette.line, backgroundColor: '#FFF', overflow: 'hidden' },
   rulerTitle: { color: palette.muted, fontSize: 10, paddingTop: 21, textAlign: 'center' }, headerWindow: { flex: 1, overflow: 'hidden' },
   columnHeader: { alignItems: 'center', justifyContent: 'center', gap: 5, minHeight: 61, borderLeftWidth: 1, borderColor: palette.line }, columnDay: { color: palette.muted, fontSize: 10 },

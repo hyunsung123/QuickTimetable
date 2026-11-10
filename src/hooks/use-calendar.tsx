@@ -3,7 +3,7 @@ import { getRepository } from '@/lib/database';
 import { dateKey } from '@/lib/dates';
 import { TimetableActionError } from '@/lib/timetable';
 import type { CalendarRepository } from '@/lib/repository';
-import type { EventClipboard, EventInput, EventTimeChange, Snapshot, TemplateInput } from '@/types/calendar';
+import type { EventClipboard, EventInput, EventTimeChange, Snapshot, TemplateInput, TimetableImportSource } from '@/types/calendar';
 
 interface CalendarContextValue extends Snapshot {
   loading: boolean;
@@ -15,21 +15,26 @@ interface CalendarContextValue extends Snapshot {
   clearError: () => void;
   saveEvent: (input: EventInput, id?: string) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
-  saveTemplate: (input: TemplateInput, id?: string) => Promise<void>;
-  deleteTemplate: (id: string) => Promise<void>;
+  saveTemplate: (input: TemplateInput, id?: string, presetId?: string) => Promise<void>;
+  deleteTemplate: (id: string, presetId?: string) => Promise<void>;
   ensureWeek: (date: string) => Promise<void>;
   clipboard: EventClipboard | null;
   setClipboard: (clipboard: EventClipboard) => void;
   updateEventTimes: (changes: EventTimeChange[]) => Promise<void>;
-  updateTemplateTimes: (changes: EventTimeChange[]) => Promise<void>;
+  updateTemplateTimes: (changes: EventTimeChange[], presetId?: string) => Promise<void>;
   pasteEvent: (clipboard: EventClipboard, date: string, startMinute: number) => Promise<void>;
-  pasteTemplate: (clipboard: EventClipboard, weekday: number, startMinute: number) => Promise<void>;
+  pasteTemplate: (clipboard: EventClipboard, weekday: number, startMinute: number, presetId?: string) => Promise<void>;
+  createPreset: (source?: TimetableImportSource) => Promise<string>;
+  renamePreset: (id: string, name: string) => Promise<void>;
+  setDefaultPreset: (id: string | null) => Promise<void>;
+  deletePreset: (id: string) => Promise<void>;
+  replacePreset: (id: string, source: TimetableImportSource) => Promise<void>;
 }
 
 const CalendarContext = createContext<CalendarContextValue | null>(null);
 
 export function CalendarProvider({ children }: { children: ReactNode }) {
-  const [snapshot, setSnapshot] = useState<Snapshot>({ events: [], templates: [] });
+  const [snapshot, setSnapshot] = useState<Snapshot>({ events: [], templates: [], presets: [] });
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,25 +58,35 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
       const next = await operation(repo);
       setSnapshot(next);
       setError(null);
+      return next;
     } catch (cause) {
       if (!(cause instanceof TimetableActionError)) setError('변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.');
       throw cause;
     }
   }, []);
-  const saveEvent = useCallback((input: EventInput, id?: string) => perform(repo => repo.saveEvent(input, id)), [perform]);
-  const deleteEvent = useCallback((id: string) => perform(repo => repo.deleteEvent(id)), [perform]);
-  const saveTemplate = useCallback((input: TemplateInput, id?: string) => perform(repo => repo.saveTemplate(input, id)), [perform]);
-  const deleteTemplate = useCallback((id: string) => perform(repo => repo.deleteTemplate(id)), [perform]);
-  const ensureWeek = useCallback((date: string) => perform(repo => repo.ensureWeek(date)), [perform]);
-  const updateEventTimes = useCallback((changes: EventTimeChange[]) => perform(repo => repo.updateEventTimes(changes)), [perform]);
-  const updateTemplateTimes = useCallback((changes: EventTimeChange[]) => perform(repo => repo.updateTemplateTimes(changes)), [perform]);
-  const pasteEvent = useCallback((value: EventClipboard, date: string, start: number) => perform(repo => repo.pasteEvent(value, date, start)), [perform]);
-  const pasteTemplate = useCallback((value: EventClipboard, day: number, start: number) => perform(repo => repo.pasteTemplate(value, day, start)), [perform]);
+  const saveEvent = useCallback(async (input: EventInput, id?: string) => { await perform(repo => repo.saveEvent(input, id)); }, [perform]);
+  const deleteEvent = useCallback(async (id: string) => { await perform(repo => repo.deleteEvent(id)); }, [perform]);
+  const saveTemplate = useCallback(async (input: TemplateInput, id?: string, presetId?: string) => { await perform(repo => repo.saveTemplate(input, id, presetId)); }, [perform]);
+  const deleteTemplate = useCallback(async (id: string, presetId?: string) => { await perform(repo => repo.deleteTemplate(id, presetId)); }, [perform]);
+  const ensureWeek = useCallback(async (date: string) => { await perform(repo => repo.ensureWeek(date)); }, [perform]);
+  const updateEventTimes = useCallback(async (changes: EventTimeChange[]) => { await perform(repo => repo.updateEventTimes(changes)); }, [perform]);
+  const updateTemplateTimes = useCallback(async (changes: EventTimeChange[], presetId?: string) => { await perform(repo => repo.updateTemplateTimes(changes, presetId)); }, [perform]);
+  const pasteEvent = useCallback(async (value: EventClipboard, date: string, start: number) => { await perform(repo => repo.pasteEvent(value, date, start)); }, [perform]);
+  const pasteTemplate = useCallback(async (value: EventClipboard, day: number, start: number, presetId?: string) => { await perform(repo => repo.pasteTemplate(value, day, start, presetId)); }, [perform]);
+  const createPreset = useCallback(async (source?: TimetableImportSource) => {
+    const next = await perform(repo => repo.createPreset(source));
+    return next.presets[next.presets.length - 1].id;
+  }, [perform]);
+  const renamePreset = useCallback(async (id: string, name: string) => { await perform(repo => repo.renamePreset(id, name)); }, [perform]);
+  const setDefaultPreset = useCallback(async (id: string | null) => { await perform(repo => repo.setDefaultPreset(id)); }, [perform]);
+  const deletePreset = useCallback(async (id: string) => { await perform(repo => repo.deletePreset(id)); }, [perform]);
+  const replacePreset = useCallback(async (id: string, source: TimetableImportSource) => { await perform(repo => repo.replacePreset(id, source)); }, [perform]);
 
   return <CalendarContext.Provider value={{ ...snapshot, loading, initialized, error, selectedDate, setSelectedDate,
     retry: () => { setLoading(true); setAttempt(value => value + 1); }, clearError: () => setError(null),
     saveEvent, deleteEvent, saveTemplate, deleteTemplate, ensureWeek, clipboard, setClipboard,
-    updateEventTimes, updateTemplateTimes, pasteEvent, pasteTemplate }}>{children}</CalendarContext.Provider>;
+    updateEventTimes, updateTemplateTimes, pasteEvent, pasteTemplate,
+    createPreset, renamePreset, setDefaultPreset, deletePreset, replacePreset }}>{children}</CalendarContext.Provider>;
 }
 
 export function useCalendar() {

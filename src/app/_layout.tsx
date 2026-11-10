@@ -12,6 +12,8 @@ export default function RootLayout() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="settings" />
       <Stack.Screen name="default-timetable" />
+      <Stack.Screen name="preset-editor" />
+      <Stack.Screen name="import-timetable" />
     </Stack></StorageGate>
   </CalendarProvider></SafeAreaProvider></GestureHandlerRootView>;
 }
