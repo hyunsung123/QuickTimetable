@@ -4,6 +4,7 @@ export type DragMode = 'move' | 'start' | 'end';
 export const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 export class TimetableActionError extends Error {}
+export class WeekReplacementRequiredError extends TimetableActionError {}
 
 export const overlaps = (a: { startMinute: number; endMinute: number }, b: { startMinute: number; endMinute: number }) =>
   a.startMinute < b.endMinute && a.endMinute > b.startMinute;

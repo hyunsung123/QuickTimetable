@@ -5,7 +5,7 @@ const { readFileSync, mkdtempSync, unlinkSync, rmdirSync } = require('node:fs');
 const { join } = require('node:path');
 const { tmpdir } = require('node:os');
 const { CalendarRepository } = require('../.test-build/lib/repository');
-const { nextApplyWeek } = require('../.test-build/lib/presets');
+const { presetsForPicker } = require('../.test-build/lib/presets');
 
 const base = { title: '새 기본 일정', weekday: 0, startMinute: 540, endMinute: 600, color: '#426FD0' };
 function database(path = ':memory:', now = () => new Date(2026, 10, 10, 12)) {
@@ -33,22 +33,24 @@ function seedV2(db, selected = true) {
 async function seedData(repo, db) {
   const first = (await repo.initialize()).presets[0].id;
   await repo.saveTemplate(base, 'template', first);
-  await repo.ensureWeek('2026-11-16');
+  await repo.applyPresetToWeek(first, '2026-11-16');
   await repo.saveEvent({ ...base, date: '2026-11-10' }, 'manual');
   await repo.createPreset({ kind: 'preset', presetId: first });
   await repo.ensureWeek('2026-12-07');
   db.exec("INSERT INTO calendars VALUES ('extra-calendar', '테스트 캘린더')");
 }
 
-test('activation always starts next local Monday, including Monday, Sunday, leap day and year end', () => {
-  for (const [date, expected] of [
-    [new Date(2026, 10, 10, 12), '2026-11-16'], [new Date(2026, 10, 9, 0, 0), '2026-11-16'],
-    [new Date(2026, 10, 8, 23, 59), '2026-11-09'], [new Date(2026, 11, 31, 23, 59), '2027-01-04'],
-    [new Date(2024, 1, 29, 12), '2024-03-04'],
-  ]) assert.equal(nextApplyWeek(date), expected);
+test('picker prioritizes default with stable storage order without mutating input', () => {
+  const presets = [{ id: 'first', isDefault: 0 }, { id: 'second', isDefault: 0 }, { id: 'third', isDefault: 1 }, { id: 'last', isDefault: 0 }];
+  const before = structuredClone(presets);
+  assert.deepEqual(presetsForPicker(presets).map(row => row.id), ['third', 'first', 'second', 'last']);
+  assert.deepEqual(presets, before);
+  const none = presets.map(row => ({ ...row, isDefault: 0 }));
+  assert.deepEqual(presetsForPicker(none), none);
+  assert.deepEqual(presetsForPicker([]), []);
 });
 
-test('v2 -> v3 only adds activation metadata and preserves IDs, presets, dated events and empty-week markers', async t => {
+test('v2 -> v3 keeps the legacy column compatible and preserves IDs, presets, dated events and empty-week markers', async t => {
   const { db, repo } = database(); t.after(() => db.close()); seedV2(db);
   const before = records(db);
   const snapshot = await repo.initialize();
@@ -58,7 +60,7 @@ test('v2 -> v3 only adds activation metadata and preserves IDs, presets, dated e
   for (const preset of snapshot.presets) {
     const { applyFromWeek, ...original } = preset;
     assert.deepEqual(original, { ...before.timetable_presets.find(row => row.id === preset.id) });
-    assert.equal(applyFromWeek, preset.isDefault ? '2026-11-16' : null);
+    assert.equal(applyFromWeek, null);
   }
   assert.deepEqual(await new CalendarRepository({
     execAsync: async sql => db.exec(sql), runAsync: async (sql, ...args) => db.prepare(sql).run(...args), getAllAsync: async (sql, ...args) => db.prepare(sql).all(...args),
@@ -66,24 +68,24 @@ test('v2 -> v3 only adds activation metadata and preserves IDs, presets, dated e
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-02'), '2026-11-02'), []);
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-09'), '2026-11-09'), snapshot.events);
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-23'), '2026-11-23'), []);
-  assert.equal(inWeek(await repo.ensureWeek('2026-11-16'), '2026-11-16').length, 1);
+  assert.equal(inWeek(await repo.ensureWeek('2026-11-16'), '2026-11-16').length, 0);
 });
 
-test('v2 with no default stays unselected; failed activation migration rolls back the column and version', async t => {
+test('v2 with no default stays unselected; failed schema migration rolls back the column and version', async t => {
   const { db, repo, driver } = database(); t.after(() => db.close()); seedV2(db, false);
-  const before = records(db); const run = driver.runAsync;
-  driver.runAsync = async (sql, ...args) => { if (sql.startsWith('UPDATE timetable_presets SET applyFromWeek')) throw new Error('migration failure'); return run(sql, ...args); };
+  const before = records(db); const exec = driver.execAsync;
+  driver.execAsync = async sql => { if (sql.includes('PRAGMA user_version = 3')) throw new Error('migration failure'); return exec(sql); };
   await assert.rejects(repo.initialize());
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
   assert(!db.prepare('PRAGMA table_info(timetable_presets)').all().some(row => row.name === 'applyFromWeek'));
   assert.deepEqual(records(db), before);
-  driver.runAsync = run;
+  driver.execAsync = exec;
   const after = await repo.initialize();
   assert(after.presets.every(preset => !preset.isDefault && preset.applyFromWeek === null));
   assert.deepEqual(after.events, before.events);
 });
 
-test('Nov 10 activation preserves past/current, opened-empty and manual future weeks; only untouched Nov 16+ can copy', async t => {
+test('creating and selecting defaults never copies into past, current, opened or untouched future weeks', async t => {
   let now = new Date(2026, 10, 10, 12);
   const { db, repo } = database(':memory:', () => now); t.after(() => db.close());
   await repo.initialize(); await repo.setDefaultPreset(null);
@@ -95,10 +97,11 @@ test('Nov 10 activation preserves past/current, opened-empty and manual future w
   await repo.saveTemplate(base, 'new-default', preset.id);
   const selected = await repo.setDefaultPreset(preset.id);
   assert.deepEqual(selected.events, originalEvents);
-  assert.equal(selected.presets.find(row => row.id === preset.id).applyFromWeek, '2026-11-16');
+  assert.equal(selected.presets.find(row => row.id === preset.id).applyFromWeek, null);
   for (const week of ['2026-11-02', '2026-11-09', '2026-11-23']) assert.deepEqual(inWeek(await repo.ensureWeek(week), week), []);
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-30'), '2026-11-30'), originalEvents);
-  let snapshot = await repo.ensureWeek('2026-11-16');
+  assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-16'), '2026-11-16'), []);
+  let snapshot = await repo.applyPresetToWeek(preset.id, '2026-11-16');
   const generated = inWeek(snapshot, '2026-11-16')[0];
   assert.equal(generated.title, base.title); assert.equal(generated.date, '2026-11-16');
   await repo.deleteEvent(generated.id);
@@ -109,18 +112,18 @@ test('Nov 10 activation preserves past/current, opened-empty and manual future w
   const beforeChange = await repo.initialize();
   snapshot = await repo.setDefaultPreset(next.id);
   assert.deepEqual(snapshot.events, beforeChange.events);
-  assert.equal(snapshot.presets.find(row => row.id === next.id).applyFromWeek, '2026-11-23');
+  assert.equal(snapshot.presets.find(row => row.id === next.id).applyFromWeek, null);
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-23'), '2026-11-23'), []);
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-16'), '2026-11-16'), []);
-  assert.equal(inWeek(await repo.ensureWeek('2026-12-07'), '2026-12-07')[0].title, '바꾼 기본 일정');
+  assert.deepEqual(inWeek(await repo.ensureWeek('2026-12-07'), '2026-12-07'), []);
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-30'), '2026-11-30'), originalEvents);
 });
 
-test('changing default never rewrites dated copies; unselecting clears policy and protects subsequently opened empty weeks', async t => {
+test('changing or unselecting default never rewrites dated copies or populates empty weeks', async t => {
   let now = new Date(2026, 10, 1, 12);
   const { db, repo } = database(':memory:', () => now); t.after(() => db.close());
   const first = (await repo.initialize()).presets[0]; await repo.saveTemplate(base, 'first-block', first.id);
-  const before = await repo.ensureWeek('2026-11-09');
+  const before = await repo.applyPresetToWeek(first.id, '2026-11-09');
   now = new Date(2026, 10, 10, 12);
   const next = (await repo.createPreset()).presets.at(-1); await repo.saveTemplate({ ...base, title: '두 번째 기본 일정' }, 'second-block', next.id);
   let snapshot = await repo.setDefaultPreset(next.id);
@@ -132,24 +135,28 @@ test('changing default never rewrites dated copies; unselecting clears policy an
   assert(snapshot.presets.every(row => !row.isDefault && row.applyFromWeek === null));
   await repo.setDefaultPreset(next.id);
   now = new Date(2026, 10, 24, 12);
-  // Tapping the already selected preset is idempotent, not a new activation.
+  // Tapping the already selected preset is idempotent.
   snapshot = await repo.setDefaultPreset(next.id);
-  assert.equal(snapshot.presets.find(row => row.id === next.id).applyFromWeek, '2026-11-16');
+  assert.equal(snapshot.presets.find(row => row.id === next.id).applyFromWeek, null);
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-16'), '2026-11-16'), []);
   assert.deepEqual(inWeek(await repo.ensureWeek('2026-11-09'), '2026-11-09'), before.events);
 });
 
-test('file reopen preserves original activation date without rebasing to restart time', async () => {
+test('file reopen preserves legacy applyFromWeek metadata but never uses it for automatic copies', async () => {
   const folder = mkdtempSync(join(tmpdir(), 'quick-activation-')); const path = join(folder, 'calendar.db');
   let connection;
   try {
     connection = database(path);
     const preset = (await connection.repo.initialize()).presets[0]; await connection.repo.saveTemplate(base, 'source', preset.id);
+    connection.db.prepare('UPDATE timetable_presets SET applyFromWeek = ? WHERE id = ?').run('2026-11-16', preset.id);
     connection.db.close(); connection = database(path, () => new Date(2027, 0, 5, 12));
     const snapshot = await connection.repo.initialize();
     assert.equal(snapshot.presets[0].applyFromWeek, '2026-11-16');
     assert.deepEqual(inWeek(await connection.repo.ensureWeek('2026-11-09'), '2026-11-09'), []);
-    assert.equal(inWeek(await connection.repo.ensureWeek('2026-11-16'), '2026-11-16').length, 1);
+    assert.equal(inWeek(await connection.repo.ensureWeek('2026-11-16'), '2026-11-16').length, 0);
+    assert.equal(inWeek(await connection.repo.ensureWeek('2027-05-03'), '2027-05-03').length, 0);
+    await connection.repo.setDefaultPreset(null); await connection.repo.setDefaultPreset(preset.id);
+    assert.equal((await connection.repo.initialize()).presets[0].applyFromWeek, '2026-11-16');
   } finally { connection?.db.close(); unlinkSync(path); rmdirSync(folder); }
 });
 

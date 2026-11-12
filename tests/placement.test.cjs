@@ -188,13 +188,14 @@ test('overlapping legacy presets are preserved and neither cloned nor auto-appli
   db.prepare('INSERT INTO templates VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('legacy', preset, 'personal', '기존 겹침', 0, 690, 750, '#426FD0', 'created', 'updated');
   const before = await repo.initialize();
   await assert.rejects(repo.createPreset({ kind: 'preset', presetId: preset }), /겹치는 일정/);
-  await assert.rejects(repo.ensureWeek(date), /기본 시간표에 겹치는 일정/);
+  await assert.rejects(repo.applyPresetToWeek(preset, date), /겹치는 일정/);
   assert.deepEqual(await repo.initialize(), before);
   assert.equal(db.prepare('SELECT * FROM initialized_weeks').all().length, 0);
   const original = before.templates.find(row => row.id === 'legacy');
   await repo.saveTemplate({ ...original, title: '제목 수정' }, original.id, preset);
   await repo.saveTemplate({ ...original, startMinute: 720, endMinute: 780 }, original.id, preset);
-  assert.equal((await repo.ensureWeek(date)).events.length, 2);
+  assert.equal((await repo.ensureWeek(date)).events.length, 0);
+  assert.equal((await repo.applyPresetToWeek(preset, date)).events.length, 2);
 });
 
 test('move writes preserve identity/metadata, and a later write failure rolls back times plus week markers', async t => {

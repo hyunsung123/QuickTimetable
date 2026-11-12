@@ -21,6 +21,7 @@ function database(path = ':memory:') {
   return { db, driver, repo: new CalendarRepository(driver, () => new Date(2026, 10, 1, 12)) };
 }
 const base = { title: '수업', weekday: 0, startMinute: 540, endMinute: 660, color: '#426FD0' };
+async function loadWeek(repo, week) { return repo.applyPresetToWeek((await repo.initialize()).presets[0].id, week); }
 const event = { id: 'drag', title: '공부', day: 2, startMinute: 540, endMinute: 660, color: '#426FD0' };
 
 test('local date arithmetic handles leap days, month ends, and year boundaries', () => {
@@ -107,45 +108,46 @@ test('SQLite event CRUD shares one ordered snapshot and preserves creation/origi
   assert.deepEqual(snapshot.events.map(item => item.id), ['later']);
 });
 
-test('concurrent initialization of the same week produces exactly one copy', async t => {
+test('concurrent visits produce one week marker and never copy the default', async t => {
   const { repo, db } = database(); t.after(() => db.close());
   await repo.initialize(); await repo.saveTemplate(base, 'template');
   await Promise.all([repo.ensureWeek('2026-11-09'), repo.ensureWeek('2026-11-10'), repo.ensureWeek('2026-11-15')]);
   const snapshot = await repo.initialize();
-  assert.equal(snapshot.events.length, 1);
-  assert.equal(snapshot.events[0].date, '2026-11-09');
-  assert.equal(snapshot.events[0].templateId, 'template');
+  assert.equal(snapshot.events.length, 0);
+  assert.deepEqual(db.prepare('SELECT weekStart FROM initialized_weeks').all().map(row => row.weekStart), ['2026-11-09']);
 });
 
 test('deleted default events never reappear on revisiting an initialized week', async t => {
   const { repo, db } = database(); t.after(() => db.close());
   await repo.initialize(); await repo.saveTemplate(base, 'template');
-  let snapshot = await repo.ensureWeek('2026-11-09');
+  let snapshot = await loadWeek(repo, '2026-11-09');
   await repo.deleteEvent(snapshot.events[0].id);
   snapshot = await repo.ensureWeek('2026-11-09');
   assert.equal(snapshot.events.length, 0);
   snapshot = await repo.ensureWeek('2026-11-16');
-  assert.equal(snapshot.events.length, 1);
+  assert.equal(snapshot.events.length, 0);
+  assert.equal((await loadWeek(repo, '2026-11-16')).events.length, 1);
 });
 
 test('editing a generated instance never changes its template or another week', async t => {
   const { repo, db } = database(); t.after(() => db.close());
   await repo.initialize(); await repo.saveTemplate(base, 'template');
-  let snapshot = await repo.ensureWeek('2026-11-09');
+  let snapshot = await loadWeek(repo, '2026-11-09');
   const original = snapshot.events[0];
   await repo.saveEvent({ ...original, title: '이번 주만 변경', date: '2026-11-11', startMinute: 600 }, original.id);
-  snapshot = await repo.ensureWeek('2026-11-16');
+  snapshot = await loadWeek(repo, '2026-11-16');
   assert.equal(snapshot.templates[0].title, '수업');
   assert.equal(snapshot.events.find(item => item.date === '2026-11-16').startMinute, 540);
   assert.equal(snapshot.events.find(item => item.id === original.id).templateId, 'template');
 });
 
-test('template edits affect only unopened weeks, including preopened future weeks', async t => {
+test('template edits affect only subsequent manual imports and preserve previous copies', async t => {
   const { repo, db } = database(); t.after(() => db.close());
   await repo.initialize(); await repo.saveTemplate(base, 'template');
-  await repo.ensureWeek('2026-12-07');
+  await loadWeek(repo, '2026-12-07');
   await repo.saveTemplate({ ...base, title: '새 기본 일정', weekday: 4 }, 'template');
-  let snapshot = await repo.ensureWeek('2026-12-14');
+  assert.equal((await repo.ensureWeek('2026-12-14')).events.length, 1);
+  let snapshot = await loadWeek(repo, '2026-12-14');
   assert.equal(snapshot.events.find(item => item.date === '2026-12-07').title, '수업');
   assert.equal(snapshot.events.find(item => item.date === '2026-12-18').title, '새 기본 일정');
   await repo.deleteTemplate('template');
@@ -162,7 +164,7 @@ test('a week opened without templates stays initialized after templates are adde
   assert.equal(snapshot.events.length, 0);
 });
 
-test('initialization rollback removes partial copies and permits a clean retry', async t => {
+test('manual import rollback removes partial copies and permits a clean retry', async t => {
   const { repo, db, driver } = database(); t.after(() => db.close());
   await repo.initialize(); await repo.saveTemplate(base); await repo.saveTemplate({ ...base, weekday: 1 });
   const run = driver.runAsync;
@@ -171,10 +173,10 @@ test('initialization rollback removes partial copies and permits a clean retry',
     if (sql.startsWith('INSERT INTO events') && ++inserted === 2) throw new Error('simulated disk failure');
     return run(sql, ...values);
   };
-  await assert.rejects(repo.ensureWeek('2026-11-09'));
+  await assert.rejects(loadWeek(repo, '2026-11-09'));
   assert.equal((await repo.initialize()).events.length, 0);
   driver.runAsync = run;
-  assert.equal((await repo.ensureWeek('2026-11-09')).events.length, 2);
+  assert.equal((await loadWeek(repo, '2026-11-09')).events.length, 2);
 });
 
 test('invalid data is rejected without writing; 23:30–24:00 persists on its original date', async t => {
@@ -196,7 +198,7 @@ test('SQLite file reopen preserves events, templates, and deleted-instance initi
   try {
     first = database(file);
     await first.repo.initialize(); await first.repo.saveTemplate(base, 'template');
-    const snapshot = await first.repo.ensureWeek('2026-11-09');
+    const snapshot = await loadWeek(first.repo, '2026-11-09');
     await first.repo.deleteEvent(snapshot.events[0].id);
     await first.repo.saveEvent({ ...base, date: '2026-11-10' }, 'manual');
     first.db.close(); first = null;
@@ -397,7 +399,7 @@ for (const template of [false, true]) {
 test('SQLite template resize leaves already generated dates and unrelated templates intact', async t => {
   const { repo, db } = database(); t.after(() => db.close());
   await repo.initialize(); await seedAdjacent(repo, true);
-  const before = await repo.ensureWeek('2026-11-09');
+  const before = await loadWeek(repo, '2026-11-09');
   const after = await repo.updateTemplateTimes(resizeBoundary(adjacent, 'B', 'start', -30).changes);
   assert.deepEqual(after.events, before.events);
   assert.equal(after.templates.find(item => item.id === 'A').endMinute, 570);
@@ -462,7 +464,7 @@ test('concurrent pastes recheck collisions in their transaction and produce only
 test('template paste checks template collisions, retains copies and leaves dated events unchanged', async t => {
   const { repo, db } = database(); t.after(() => db.close());
   await repo.initialize(); await repo.saveTemplate(base, 'source');
-  const before = await repo.ensureWeek('2026-11-09');
+  const before = await loadWeek(repo, '2026-11-09');
   const clipboard = copyEvent(before.templates[0]);
   let after = await repo.pasteTemplate(clipboard, 1, 540);
   after = await repo.pasteTemplate(clipboard, 2, 540);

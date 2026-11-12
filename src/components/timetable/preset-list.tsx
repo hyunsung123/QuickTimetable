@@ -24,6 +24,7 @@ export function PresetList() {
     router.push({ pathname: '/preset-editor', params: { id } });
   }); };
   return <Screen><ScreenHeader title="기본 시간표 관리" back /><ScrollView contentContainerStyle={styles.content}>
+    <Text style={styles.empty}>기본으로 선택한 시간표는 불러오기 목록 상단에 표시됩니다.</Text>
     <View style={styles.group}>{calendar.presets.map(preset => <View key={preset.id} style={styles.row}>
       <Pressable accessibilityRole="radio" accessibilityLabel={`${preset.name} 기본으로 설정`} accessibilityState={{ checked: !!preset.isDefault, disabled: busy }} disabled={busy}
         onPress={() => { void perform(() => calendar.setDefaultPreset(preset.id)); }} style={styles.checkTarget}>
@@ -35,7 +36,6 @@ export function PresetList() {
     </View>)}</View>
     {!calendar.presets.length && <Text style={styles.empty}>저장된 시간표가 없습니다.</Text>}
     {active && <>
-      {!!active.applyFromWeek && <Text style={styles.empty}>{active.applyFromWeek.replace(/-/g, '. ')}부터 새 주에 적용</Text>}
       <Pressable accessibilityRole="button" accessibilityLabel="기본 지정 해제" disabled={busy} onPress={() => { void perform(() => calendar.setDefaultPreset(null)); }} style={styles.add}><Text style={styles.addText}>기본 지정 해제</Text></Pressable>
     </>}
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => setAdding(true)} style={styles.add}><Text style={styles.addText}>+ 시간표 추가</Text></Pressable>

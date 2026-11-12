@@ -90,7 +90,7 @@ test('template edit, paste, shared resize and deletion are scoped to the selecte
     await repo.saveTemplate(base, `${prefix}1`, preset);
     await repo.saveTemplate({ ...base, startMinute: 600, endMinute: 660 }, `${prefix}2`, preset);
   }
-  const before = await repo.ensureWeek('2026-11-09');
+  const before = await repo.applyPresetToWeek(first, '2026-11-09');
   const grid = forPreset(before, first).map(row => ({ ...row, day: row.weekday }));
   snapshot = await repo.updateTemplateTimes(resizeBoundary(grid, 'A1', 'end', 30).changes, first);
   assert.equal(snapshot.templates.find(row => row.id === 'A2').startMinute, 630);
@@ -107,16 +107,17 @@ test('template edit, paste, shared resize and deletion are scoped to the selecte
   assert.deepEqual(snapshot.events, before.events);
 });
 
-test('default changes apply only to untouched weeks, including no-default and previously opened future weeks', async t => {
+test('default changes preserve all weeks; manual import works independently of the checked preset', async t => {
   const { db, repo } = database(); t.after(() => db.close());
   let snapshot = await repo.initialize(); const first = snapshot.presets[0].id;
   await repo.saveTemplate(base, 'first-block', first);
-  const old = await repo.ensureWeek('2026-11-09');
-  await repo.ensureWeek('2027-01-04');
+  const old = await repo.applyPresetToWeek(first, '2026-11-09');
+  await repo.applyPresetToWeek(first, '2027-01-04');
   snapshot = await repo.createPreset(); const second = lastPreset(snapshot).id;
   await repo.saveTemplate({ ...base, title: '시험 기간', weekday: 6 }, 'second-block', second);
   await repo.setDefaultPreset(second);
-  snapshot = await repo.ensureWeek('2026-11-16');
+  assert.equal((await repo.ensureWeek('2026-11-16')).events.length, 2);
+  snapshot = await repo.applyPresetToWeek(second, '2026-11-16');
   assert.equal(snapshot.events.find(row => row.date === '2026-11-22').title, '시험 기간');
   assert.deepEqual(snapshot.events.find(row => row.id === old.events[0].id), old.events[0]);
   assert.equal(snapshot.events.find(row => row.date === '2027-01-04').title, '수업');
@@ -165,7 +166,7 @@ test('saved preset duplication issues fresh block IDs and preserves source prese
   const { db, repo } = database(); t.after(() => db.close());
   let snapshot = await repo.initialize(); const first = snapshot.presets[0].id;
   await repo.saveTemplate(base, 'original', first);
-  const before = await repo.ensureWeek('2026-11-09');
+  const before = await repo.applyPresetToWeek(first, '2026-11-09');
   snapshot = await repo.createPreset({ kind: 'preset', presetId: first }); const second = lastPreset(snapshot).id;
   const cloned = forPreset(snapshot, second)[0];
   assert.notEqual(cloned.id, 'original');
@@ -184,7 +185,7 @@ test('replacement rolls back delete and partial insertion on write OR snapshot f
   await repo.saveTemplate({ ...base, weekday: 1 }, 'source2', source);
   snapshot = await repo.createPreset(); const target = lastPreset(snapshot).id;
   await repo.saveTemplate({ ...base, title: '교체 전', weekday: 6 }, 'target', target);
-  const before = await repo.ensureWeek('2026-11-09');
+  const before = await repo.applyPresetToWeek(source, '2026-11-09');
   const run = driver.runAsync; let inserts = 0;
   driver.runAsync = async (sql, ...args) => { if (sql.startsWith('INSERT INTO templates') && ++inserts === 2) throw new Error('write failure'); return run(sql, ...args); };
   await assert.rejects(repo.replacePreset(target, { kind: 'preset', presetId: source }));
@@ -226,7 +227,7 @@ test('deleting a default or all presets preserves generated weeks and leaves the
   const { db, repo } = database(); t.after(() => db.close());
   let snapshot = await repo.initialize(); const first = snapshot.presets[0].id;
   await repo.saveTemplate(base, 'origin', first);
-  const before = await repo.ensureWeek('2026-11-09');
+  const before = await repo.applyPresetToWeek(first, '2026-11-09');
   snapshot = await repo.createPreset(); const second = lastPreset(snapshot).id;
   await repo.saveTemplate({ ...base, weekday: 1 }, 'other', second);
   snapshot = await repo.deletePreset(first);

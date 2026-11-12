@@ -18,6 +18,8 @@ interface CalendarContextValue extends Snapshot {
   saveTemplate: (input: TemplateInput, id?: string, presetId?: string) => Promise<void>;
   deleteTemplate: (id: string, presetId?: string) => Promise<void>;
   ensureWeek: (date: string) => Promise<void>;
+  clearWeek: (date: string) => Promise<void>;
+  applyPresetToWeek: (presetId: string, date: string, replaceExisting?: boolean) => Promise<void>;
   clipboard: EventClipboard | null;
   setClipboard: (clipboard: EventClipboard) => void;
   updateEventTimes: (changes: EventTimeChange[]) => Promise<void>;
@@ -73,6 +75,8 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   const saveTemplate = useCallback(async (input: TemplateInput, id?: string, presetId?: string) => { await perform(repo => repo.saveTemplate(input, id, presetId)); }, [perform]);
   const deleteTemplate = useCallback(async (id: string, presetId?: string) => { await perform(repo => repo.deleteTemplate(id, presetId)); }, [perform]);
   const ensureWeek = useCallback(async (date: string) => { await perform(repo => repo.ensureWeek(date)); }, [perform]);
+  const clearWeek = useCallback(async (date: string) => { await perform(repo => repo.clearWeek(date)); }, [perform]);
+  const applyPresetToWeek = useCallback(async (presetId: string, date: string, replaceExisting = false) => { await perform(repo => repo.applyPresetToWeek(presetId, date, replaceExisting)); }, [perform]);
   const updateEventTimes = useCallback(async (changes: EventTimeChange[]) => { await perform(repo => repo.updateEventTimes(changes)); }, [perform]);
   const updateTemplateTimes = useCallback(async (changes: EventTimeChange[], presetId?: string) => { await perform(repo => repo.updateTemplateTimes(changes, presetId)); }, [perform]);
   const pasteEvent = useCallback(async (value: EventClipboard, date: string, start: number) => { await perform(repo => repo.pasteEvent(value, date, start)); }, [perform]);
@@ -106,7 +110,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
 
   return <CalendarContext.Provider value={{ ...snapshot, loading, initialized, error, selectedDate, setSelectedDate,
     retry: () => { setLoading(true); setAttempt(value => value + 1); }, clearError: () => setError(null),
-    saveEvent, deleteEvent, saveTemplate, deleteTemplate, ensureWeek, clipboard, setClipboard,
+    saveEvent, deleteEvent, saveTemplate, deleteTemplate, ensureWeek, clearWeek, applyPresetToWeek, clipboard, setClipboard,
     updateEventTimes, updateTemplateTimes, pasteEvent, pasteTemplate,
     createPreset, renamePreset, setDefaultPreset, deletePreset, replacePreset, resetData }}><Fragment key={resetVersion}>{children}</Fragment></CalendarContext.Provider>;
 }

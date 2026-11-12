@@ -19,14 +19,15 @@ export function MonthCalendar({ selected, month = selected, events = [], onSelec
         const active = date === selected;
         const isToday = date === today;
         const outside = date.slice(0, 7) !== month.slice(0, 7);
-        const items = byDate.get(date) ?? [];
+        const items = [...(byDate.get(date) ?? [])].sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute || a.id.localeCompare(b.id));
         return <Pressable key={date} onPress={() => onSelect(date)} accessibilityRole="button"
           accessibilityLabel={`${date}${isToday ? ', 오늘' : ''}, 일정 ${items.length}개`} accessibilityState={{ selected: active }}
           style={[styles.cell, { minHeight: compact ? 42 : 64 }, active && styles.selected]}>
           <View style={[styles.numberCircle, isToday && styles.today, active && styles.activeNumber]}>
             <Text style={[styles.number, outside && { color: '#B9BFC8' }, isToday && { color: palette.blue, fontWeight: '700' }, active && { color: '#FFFFFF', fontWeight: '700' }]}>{parseDate(date).getDate()}</Text>
           </View>
-          {!compact && <View style={styles.indicators}>{items.slice(0, 3).map(event => <View key={event.id} style={[styles.dot, { backgroundColor: event.color }]} />)}{items.length > 3 && <Text style={styles.more}>+</Text>}</View>}
+          {!compact && <View style={styles.indicators}>{[items.slice(0, 4), items.slice(4, 8)].filter(row => row.length).map((row, index) =>
+            <View key={index} style={styles.dotRow}>{row.map(event => <View key={event.id} style={[styles.dot, { backgroundColor: event.color }]} />)}</View>)}</View>}
         </Pressable>;
       })}
     </View>
@@ -44,7 +45,7 @@ const styles = StyleSheet.create({
   activeNumber: { backgroundColor: palette.blue },
   today: { borderWidth: 1, borderColor: palette.blue },
   number: { fontSize: 15, color: palette.text, fontVariant: ['tabular-nums'] },
-  indicators: { height: 16, flexDirection: 'row', gap: 3, alignItems: 'center' },
+  indicators: { height: 16, gap: 3, alignItems: 'center', justifyContent: 'center' },
+  dotRow: { flexDirection: 'row', gap: 3 },
   dot: { width: 4, height: 4, borderRadius: 2 },
-  more: { fontSize: 10, color: palette.muted },
 });

@@ -27,7 +27,7 @@ export default function SettingsScreen() {
     <Pressable accessibilityRole="button" onPress={() => router.push('/default-timetable')} style={styles.row}>
       <View style={{ flex: 1 }}><Text style={styles.title}>기본 시간표 관리</Text><Text style={styles.description}>{active?.name ?? '기본 시간표 없음'} · 저장된 시간표 {presets.length}개</Text></View><Text style={styles.chevron}>›</Text>
     </Pressable>
-    <View style={styles.note}><Text style={styles.noteTitle}>일정은 자동으로 저장돼요</Text><Text style={styles.description}>이 기기에 저장되어 앱을 다시 열어도 그대로 이어집니다. 새 기본 시간표는 지정한 다음 주부터 적용되며, 이미 열거나 작성한 주간 계획은 바뀌지 않아요.</Text></View>
+    <View style={styles.note}><Text style={styles.noteTitle}>일정은 자동으로 저장돼요</Text><Text style={styles.description}>이 기기에 저장되어 앱을 다시 열어도 그대로 이어집니다. 주간 계획에서 원하는 시간표를 직접 불러올 수 있어요. 기본으로 선택한 시간표는 불러오기 목록 상단에 표시됩니다.</Text></View>
     <Text style={[styles.label, styles.testSection]}>테스트</Text>
     <Pressable accessibilityRole="button" accessibilityLabel="테스트 데이터 초기화" disabled={busy} onPress={() => { setError(''); setConfirmReset(true); }} style={styles.row}>
       <Text style={[styles.title, { color: palette.red }]}>테스트 데이터 초기화</Text>

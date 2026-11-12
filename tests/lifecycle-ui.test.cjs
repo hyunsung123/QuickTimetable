@@ -16,7 +16,7 @@ async function mountedData(t, screen = 'settings') {
   const repo = new CalendarRepository(driver, () => new Date(2026, 10, 10, 12));
   const preset = (await repo.initialize()).presets[0];
   await repo.saveTemplate(base, 'template', preset.id);
-  await repo.ensureWeek('2026-11-16');
+  await repo.applyPresetToWeek(preset.id, '2026-11-16');
   await repo.saveEvent({ ...base, date: '2026-11-10' }, 'manual');
   const ui = createUiHarness({ repository: repo });
   const { React, TestRenderer, load } = ui;
@@ -122,10 +122,10 @@ test('writes attempted while resetting cannot resurrect stale data after reset c
   await act(async () => ui.renderer.unmount());
 });
 
-test('preset list displays the persisted apply date and can unselect the default without editing dated events', async t => {
+test('preset list describes picker priority and can unselect without editing dated events', async t => {
   const ui = await mountedData(t, 'presets'); const { act } = ui.TestRenderer;
   const before = ui.consumers.get('calendar').events;
-  assert(ui.renderer.root.findAllByType('Text').some(node => String(node.props.children).includes('2026. 11. 16')));
+  assert(ui.renderer.root.findAllByType('Text').some(node => node.props.children === '기본으로 선택한 시간표는 불러오기 목록 상단에 표시됩니다.'));
   await act(async () => button(ui.renderer, '기본 지정 해제').props.onPress());
   assert(ui.consumers.get('presets').presets.every(preset => !preset.isDefault && preset.applyFromWeek === null));
   assert.deepEqual(ui.consumers.get('calendar').events, before);
@@ -134,7 +134,7 @@ test('preset list displays the persisted apply date and can unselect the default
   await act(async () => ui.renderer.unmount());
 });
 
-test('three tab routes retain selection styling and bottom safe-area padding', async () => {
+test('four tab routes retain selection styling and bottom safe-area padding', async () => {
   for (const bottom of [0, 34, 59]) {
     const ui = createUiHarness({ safeAreaInsets: { top: 44, bottom, left: 0, right: 0 } });
     const { React, TestRenderer: { act }, load } = ui;
@@ -142,14 +142,14 @@ test('three tab routes retain selection styling and bottom safe-area padding', a
     const { palette } = load('src/constants/calendar.ts');
     let renderer;
     await act(async () => { renderer = ui.TestRenderer.create(React.createElement(TabLayout)); });
-    assert.deepEqual(renderer.root.findAllByType('TabTrigger').map(node => [node.props.name, node.props.href]), [['calendar', './'], ['weekly', '/weekly'], ['sharing', '/sharing']]);
+    assert.deepEqual(renderer.root.findAllByType('TabTrigger').map(node => [node.props.name, node.props.href]), [['calendar', './'], ['weekly', '/weekly'], ['sharing', '/sharing'], ['mypage', '/mypage']]);
     const tabs = () => renderer.root.findAllByType('Pressable').filter(node => node.props.accessibilityRole === 'tab');
-    assert.deepEqual(tabs().map(tab => tab.findByType('Text').props.children), ['달력', '주간 계획', '캘린더 공유']);
+    assert.deepEqual(tabs().map(tab => tab.findByType('Text').props.children), ['달력', '주간 계획', '캘린더 공유', '마이페이지']);
     const bar = renderer.root.findAllByType('View').find(node => Array.isArray(node.props.style) && node.props.style[1]?.paddingBottom !== undefined);
     assert.equal(bar.props.style[1].paddingBottom, Math.max(bottom, 10));
-    for (const index of [2, 0, 1]) {
+    for (const index of [3, 2, 0, 1]) {
       await act(async () => tabs()[index].props.onPress());
-      assert.deepEqual(tabs().map(tab => !!tab.props.accessibilityState.selected), [0, 1, 2].map(value => value === index));
+      assert.deepEqual(tabs().map(tab => !!tab.props.accessibilityState.selected), [0, 1, 2, 3].map(value => value === index));
       assert.equal(tabs()[index].findByType('Text').props.style[1].color, palette.blue);
     }
     await act(async () => renderer.unmount());

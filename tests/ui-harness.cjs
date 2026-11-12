@@ -19,7 +19,7 @@ for (const name of ['onBegin', 'onStart', 'onUpdate', 'onEnd', 'onFinalize']) {
   TestGesture.prototype[name] = function (callback) { this.callbacks[name] = callback; return this; };
 }
 
-function createUiHarness({ calendar, repository, safeAreaInsets = { top: 44, bottom: 34, left: 0, right: 0 } } = {}) {
+function createUiHarness({ calendar, repository, routeParams = {}, safeAreaInsets = { top: 44, bottom: 34, left: 0, right: 0 } } = {}) {
   const cache = new Map();
   const animations = [], sharedValues = [], navigation = [], haptics = [], focusCleanups = new Set();
   const View = React.forwardRef(function NativeView(props, ref) {
@@ -55,6 +55,7 @@ function createUiHarness({ calendar, repository, safeAreaInsets = { top: 44, bot
     'react-native-safe-area-context': { SafeAreaView: View, useSafeAreaInsets: () => safeAreaInsets },
     'expo-router/ui': { Tabs, TabList: View, TabSlot: 'TabSlot', TabTrigger },
     'expo-router': {
+      useLocalSearchParams: () => routeParams,
       router: Object.fromEntries(['push', 'replace', 'back'].map(method => [method, (...args) => navigation.push({ method, args })])),
       useFocusEffect: callback => React.useEffect(() => { const cleanup = callback(); if (cleanup) focusCleanups.add(cleanup); return () => { focusCleanups.delete(cleanup); cleanup?.(); }; }, [callback]),
     },

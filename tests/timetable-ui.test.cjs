@@ -345,7 +345,7 @@ test('preset editor scopes create/delete to its own blocks and publishes dated-c
   await repo.saveTemplate({ ...events[0], weekday: 0 }, 'first', first);
   const second = (await repo.createPreset()).presets.at(-1).id;
   await repo.saveTemplate({ ...events[1], weekday: 0 }, 'second', second);
-  const before = await repo.ensureWeek('2026-11-09');
+  const before = await repo.applyPresetToWeek(first, '2026-11-09');
   const ui = await mountedRepositoryUi(repo, 'src/components/timetable/preset-editor.tsx', 'PresetEditor', { presetId: second });
   const { act } = ui.TestRenderer;
   const { TimetableGrid } = ui.load('src/components/timetable/timetable-grid.tsx');

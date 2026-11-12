@@ -10,14 +10,17 @@ export default function TabLayout() {
       <TabTrigger name="calendar" href="./" asChild><TabButton kind="calendar">달력</TabButton></TabTrigger>
       <TabTrigger name="weekly" href="/weekly" asChild><TabButton kind="weekly">주간 계획</TabButton></TabTrigger>
       <TabTrigger name="sharing" href="/sharing" asChild><TabButton kind="sharing">캘린더 공유</TabButton></TabTrigger>
+      <TabTrigger name="mypage" href="/mypage" asChild><TabButton kind="mypage">마이페이지</TabButton></TabTrigger>
     </TabList>
   </Tabs>;
 }
 
-function TabButton({ isFocused, children, kind, ...props }: Omit<TabTriggerSlotProps, 'ref'> & { kind: 'calendar' | 'weekly' | 'sharing' }) {
+function TabButton({ isFocused, children, kind, ...props }: Omit<TabTriggerSlotProps, 'ref'> & { kind: 'calendar' | 'weekly' | 'sharing' | 'mypage' }) {
   const color = isFocused ? palette.blue : '#949CAA';
   return <Pressable {...props} accessibilityRole="tab" accessibilityState={{ selected: isFocused }} style={styles.button}>
-    {kind === 'sharing' ? <View style={styles.peopleIcon} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+    {kind === 'mypage' ? <View style={styles.peopleIcon} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <View style={[styles.head, { left: 9, borderColor: color }]} /><View style={[styles.shoulders, { left: 7, borderColor: color }]} />
+    </View> : kind === 'sharing' ? <View style={styles.peopleIcon} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <View style={[styles.head, { left: 2, borderColor: color }]} /><View style={[styles.head, { right: 2, borderColor: color }]} />
       <View style={[styles.shoulders, { left: 0, borderColor: color }]} /><View style={[styles.shoulders, { right: 0, borderColor: color }]} />
     </View> : <View style={[styles.icon, { borderColor: color }]}>

@@ -1,6 +1,7 @@
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { router, useFocusEffect } from 'expo-router';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import { EventEditor, type EditorDraft } from '@/components/events/event-editor';
 import { Action, Screen, ScreenHeader } from '@/components/ui/calendar-ui';
 import { eventColors, palette } from '@/constants/calendar';
@@ -20,6 +21,11 @@ export function PlanningScreen({ presetId, headerAction, templateToolbar }: { pr
   const [readyWeek, setReadyWeek] = useState('');
   const [failedWeek, setFailedWeek] = useState('');
   const [weekError, setWeekError] = useState('');
+  const [clearTarget, setClearTarget] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState('');
+  const [gridRevision, setGridRevision] = useState(0);
+  const clearPending = useRef(false);
   const week = mondayOf(selectedDate);
   const selectedDay = template ? templateDay : weekdayOf(selectedDate);
   const templateWeek = '2024-01-01'; // A fixed Monday; templates have weekdays, not dates.
@@ -62,6 +68,15 @@ export function PlanningScreen({ presetId, headerAction, templateToolbar }: { pr
     if (template) await calendar.pasteTemplate(calendar.clipboard, day, minute, presetId);
     else await calendar.pasteEvent(calendar.clipboard, addDays(week, day), minute);
   };
+  const clear = async () => {
+    if (!clearTarget || clearPending.current) return;
+    clearPending.current = true; setClearing(true); setClearError('');
+    try {
+      await calendar.clearWeek(clearTarget);
+      setDraft(null); setGridRevision(value => value + 1); setClearTarget(null);
+    } catch { setClearError('삭제하지 못했습니다. 기존 일정은 유지됩니다. 다시 시도해 주세요.'); }
+    finally { clearPending.current = false; setClearing(false); }
+  };
 
   return <Screen>
     <ScreenHeader title={template ? preset?.name ?? '시간표' : '주간 계획'} subtitle={template ? preset?.isDefault ? '기본 시간표' : undefined : monthTitle(selectedDate)} back={template}>
@@ -69,14 +84,23 @@ export function PlanningScreen({ presetId, headerAction, templateToolbar }: { pr
     </ScreenHeader>
     {template ? <View style={styles.templateInfo}>{templateToolbar}<Action label="+" accessibilityLabel="일정 추가" onPress={() => create(selectedDay, 540)} /></View>
       : <View style={styles.nav}><Action label="‹" accessibilityLabel="이전 주" onPress={() => setSelectedDate(addDays(selectedDate, -7))} /><Text numberOfLines={1} style={styles.range}>{weekTitle(week)}</Text><Action label="›" accessibilityLabel="다음 주" onPress={() => setSelectedDate(addDays(selectedDate, 7))} /><Action label="이번 주" onPress={() => setSelectedDate(dateKey())} /></View>}
-    {template || readyWeek === week ? <TimetableGrid key={template ? presetId : week} events={events} weekStart={template ? templateWeek : week} template={template} selectedDay={selectedDay}
+    {!template && <View style={styles.weekActions}>
+      <Action label="시간표 불러오기" disabled={readyWeek !== week || clearing} onPress={() => router.push({ pathname: '/select-timetable', params: { weekStart: week } })} />
+      <Pressable accessibilityRole="button" accessibilityLabel="전체 삭제" disabled={readyWeek !== week || !events.length || clearing}
+        onPress={() => { setClearTarget(week); setClearError(''); }} style={[styles.clearButton, (!events.length || readyWeek !== week || clearing) && { opacity: 0.4 }]}><Text style={styles.clearText}>전체 삭제</Text></Pressable>
+    </View>}
+    {template || readyWeek === week ? <TimetableGrid key={template ? presetId : `${week}:${gridRevision}`} events={events} weekStart={template ? templateWeek : week} template={template} selectedDay={selectedDay}
       onSelectDay={day => template ? setTemplateDay(day) : setSelectedDate(addDays(week, day))} onCreate={create} onEdit={edit} onChange={change} onResize={resize} onPaste={paste} onDelete={remove} />
       : <View style={styles.loading}>{failedWeek === week ? <><Text style={styles.templateDescription}>{weekError}</Text><Action label="다시 시도" onPress={() => { void loadWeek(); }} /><Action label="설정" onPress={() => router.push('/settings')} /></> : <ActivityIndicator color={palette.blue} />}</View>}
     {draft && <EventEditor template={template} draft={draft} onClose={() => setDraft(null)} onSave={template ? (value, id) => calendar.saveTemplate(value, id, presetId) : calendar.saveEvent} onDelete={remove} />}
+    {clearTarget && <ConfirmationDialog title="이번 주의 일정을 모두 지울까요?" message="선택한 주의 모든 일정이 삭제됩니다. 이 작업은 되돌릴 수 없습니다."
+      confirmLabel="전체 삭제" destructive busy={clearing} error={clearError} onCancel={() => { setClearTarget(null); setClearError(''); }} onConfirm={() => { void clear(); }} />}
   </Screen>;
 }
 
 const styles = StyleSheet.create({
+  weekActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 8 },
+  clearButton: { minHeight: 42, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' }, clearText: { color: palette.red, fontSize: 14, fontWeight: '600' },
   nav: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingBottom: 12 }, range: { flex: 1, fontSize: 11, color: palette.text, textAlign: 'center' },
   templateInfo: { paddingHorizontal: 12, paddingBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 4 }, templateDescription: { color: palette.muted, fontSize: 11, lineHeight: 18 }, loading: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
 });

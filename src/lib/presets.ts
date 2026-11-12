@@ -1,9 +1,9 @@
 import type { CalendarEvent, TimetablePreset } from '../types/calendar';
-import { addDays, dateKey, mondayOf } from './dates';
+import { mondayOf } from './dates';
 
-// Use the user's local civil week, including DST and year boundaries.
-export function nextApplyWeek(now: Date) {
-  return addDays(mondayOf(dateKey(now)), 7);
+// Stable partition: the preferred preset leads, others keep storage order.
+export function presetsForPicker(presets: TimetablePreset[]) {
+  return [...presets.filter(preset => !!preset.isDefault), ...presets.filter(preset => !preset.isDefault)];
 }
 
 export function nextPresetName(presets: Pick<TimetablePreset, 'name'>[]) {

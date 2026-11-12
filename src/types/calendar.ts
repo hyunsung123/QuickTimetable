@@ -40,7 +40,7 @@ export interface TimetablePreset {
   id: string;
   name: string;
   isDefault: number;
-  applyFromWeek: string | null;
+  applyFromWeek: string | null; // Legacy v3 data, preserved but no longer used.
   createdAt: string;
   updatedAt: string;
 }

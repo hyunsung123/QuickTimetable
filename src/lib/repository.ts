@@ -1,7 +1,7 @@
 import type { CalendarEvent, EventClipboard, EventInput, EventTimeChange, Snapshot, TemplateInput, TimetableTemplate, TimetablePreset, TimetableImportSource } from '../types/calendar';
 import { addDays, mondayOf, parseDate, weekdayOf } from './dates';
-import { overlaps, pastedEvent, TimetableActionError } from './timetable';
-import { nextApplyWeek, nextPresetName } from './presets';
+import { overlaps, pastedEvent, TimetableActionError, WeekReplacementRequiredError } from './timetable';
+import { nextPresetName } from './presets';
 
 type SqlValue = string | number | null;
 export interface DatabaseDriver {
@@ -197,9 +197,8 @@ export class CalendarRepository {
             CREATE INDEX templates_preset_day ON templates(presetId, weekday, startMinute);`);
         }
         await this.db.execAsync('ALTER TABLE timetable_presets ADD COLUMN applyFromWeek TEXT;');
-        // Older versions did not record the activation date. Start conservatively
-        // next week at upgrade time, preserving all already materialized data.
-        await this.db.runAsync('UPDATE timetable_presets SET applyFromWeek = ? WHERE isDefault = 1', nextApplyWeek(this.now()));
+        // Keep schema v3 compatible with existing installations. This legacy
+        // column is no longer read or assigned by any scheduling operation.
         await this.db.execAsync('PRAGMA user_version = 3;');
         const snapshot = await this.snapshot();
         await this.db.execAsync('COMMIT');
@@ -347,10 +346,9 @@ export class CalendarRepository {
   setDefaultPreset(id: string | null): Promise<Snapshot> {
     return this.serial(() => this.transaction(async () => {
       if (id !== null && (await this.requirePreset(id)).isDefault) return;
-      const current = this.now();
-      const now = current.toISOString();
-      await this.db.runAsync('UPDATE timetable_presets SET isDefault = 0, applyFromWeek = NULL, updatedAt = ? WHERE isDefault = 1', now);
-      if (id !== null) await this.db.runAsync('UPDATE timetable_presets SET isDefault = 1, applyFromWeek = ?, updatedAt = ? WHERE id = ?', nextApplyWeek(current), now, id);
+      const now = this.now().toISOString();
+      await this.db.runAsync('UPDATE timetable_presets SET isDefault = 0, updatedAt = ? WHERE isDefault = 1', now);
+      if (id !== null) await this.db.runAsync('UPDATE timetable_presets SET isDefault = 1, updatedAt = ? WHERE id = ?', now, id);
     }));
   }
 
@@ -375,26 +373,36 @@ export class CalendarRepository {
 
   ensureWeek(date: string): Promise<Snapshot> {
     return this.serial(() => this.transaction(async () => {
+      // Visiting any week only records the visit. Presets are always manual.
+      await this.markWeek(date, this.now().toISOString());
+    }));
+  }
+
+  clearWeek(date: string): Promise<Snapshot> {
+    return this.serial(() => this.transaction(async () => {
       const week = mondayOf(date);
-      const existing = await this.db.getAllAsync('SELECT weekStart FROM initialized_weeks WHERE weekStart = ?', week);
-      if (!existing.length) {
-        const dated = await this.db.getAllAsync('SELECT id FROM events WHERE date >= ? AND date < ? LIMIT 1', week, addDays(week, 7));
-        const templates = dated.length ? [] : await this.db.getAllAsync<TimetableTemplate>(`SELECT templates.* FROM templates
-          JOIN timetable_presets ON templates.presetId = timetable_presets.id
-          WHERE timetable_presets.isDefault = 1 AND timetable_presets.applyFromWeek IS NOT NULL AND timetable_presets.applyFromWeek <= ?`, week);
-        const now = new Date().toISOString();
-        // Legacy presets may contain overlaps. Refuse the entire copy rather
-        // than choosing a winner, altering the preset, or creating new clashes.
-        this.validateImportedRows(templates, '기본 시간표에 겹치는 일정이 있습니다. 기본 시간표에서 시간을 수정한 뒤 다시 시도해 주세요.');
-        for (const template of templates) {
-          await this.db.runAsync(`INSERT INTO events (id, calendarId, title, date, startMinute, endMinute, color, createdAt, updatedAt, templateId)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          newId(), template.calendarId, template.title, addDays(week, template.weekday), template.startMinute, template.endMinute, template.color, now, now, template.id);
-        }
-        // Even a non-eligible empty week becomes an explicitly opened week.
-        // Keep its marker after deletion or later changes to the default.
-        await this.db.runAsync('INSERT INTO initialized_weeks VALUES (?, ?)', week, now);
+      await this.db.runAsync('DELETE FROM events WHERE date >= ? AND date < ?', week, addDays(week, 7));
+      await this.markWeek(week, this.now().toISOString());
+    }));
+  }
+
+  applyPresetToWeek(presetId: string, date: string, replaceExisting = false): Promise<Snapshot> {
+    return this.serial(() => this.transaction(async () => {
+      const week = mondayOf(date);
+      await this.requirePreset(presetId);
+      const templates = await this.db.getAllAsync<TimetableTemplate>('SELECT * FROM templates WHERE presetId = ? ORDER BY weekday, startMinute, id', presetId);
+      this.validateImportedRows(templates);
+      const existing = await this.db.getAllAsync('SELECT id FROM events WHERE date >= ? AND date < ? LIMIT 1', week, addDays(week, 7));
+      // Also protect a week that became occupied after opening the picker.
+      if (existing.length && !replaceExisting) throw new WeekReplacementRequiredError('이 주에 일정이 있습니다. 교체 여부를 확인해 주세요.');
+      if (existing.length) await this.db.runAsync('DELETE FROM events WHERE date >= ? AND date < ?', week, addDays(week, 7));
+      const now = this.now().toISOString();
+      for (const template of templates) {
+        await this.db.runAsync(`INSERT INTO events (id, calendarId, title, date, startMinute, endMinute, color, createdAt, updatedAt, templateId)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        newId(), template.calendarId, template.title, addDays(week, template.weekday), template.startMinute, template.endMinute, template.color, now, now, template.id);
       }
+      await this.markWeek(week, now);
     }));
   }
 }

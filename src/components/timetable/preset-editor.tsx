@@ -46,7 +46,7 @@ export function PresetEditor({ presetId }: { presetId: string }) {
         </View>
       </KeyboardAvoidingView>
     </Modal>}
-    {deleting && <ConfirmationDialog title="시간표를 삭제할까요?" message={preset.isDefault ? '기본 지정이 해제됩니다. 새 주는 빈 시간표로 시작하며, 이미 만든 주간 일정은 유지됩니다.' : '이미 만든 주간 일정과 다른 시간표는 유지됩니다.'}
+    {deleting && <ConfirmationDialog title="시간표를 삭제할까요?" message={preset.isDefault ? '기본 지정이 해제됩니다. 이미 불러온 주간 일정과 다른 시간표는 유지됩니다.' : '이미 만든 주간 일정과 다른 시간표는 유지됩니다.'}
       confirmLabel="삭제" destructive busy={busy} error={error} onCancel={() => setDeleting(false)} onConfirm={remove} />}
   </View>;
 }
