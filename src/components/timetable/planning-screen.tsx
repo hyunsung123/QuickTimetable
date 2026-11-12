@@ -7,6 +7,7 @@ import { eventColors, palette } from '@/constants/calendar';
 import { useCalendar } from '@/hooks/use-calendar';
 import { addDays, dateKey, mondayOf, monthTitle, weekdayOf, weekTitle } from '@/lib/dates';
 import type { EventTimeChange, GridEvent } from '@/types/calendar';
+import { TimetableActionError } from '@/lib/timetable';
 import { TimetableGrid } from './timetable-grid';
 
 export function PlanningScreen({ presetId, headerAction, templateToolbar }: { presetId?: string; headerAction?: ReactNode; templateToolbar?: ReactNode }) {
@@ -18,13 +19,14 @@ export function PlanningScreen({ presetId, headerAction, templateToolbar }: { pr
   const [draft, setDraft] = useState<EditorDraft | null>(null);
   const [readyWeek, setReadyWeek] = useState('');
   const [failedWeek, setFailedWeek] = useState('');
+  const [weekError, setWeekError] = useState('');
   const week = mondayOf(selectedDate);
   const selectedDay = template ? templateDay : weekdayOf(selectedDate);
   const templateWeek = '2024-01-01'; // A fixed Monday; templates have weekdays, not dates.
 
   const loadWeek = useCallback((isActive: () => boolean = () => true) => {
     return ensureWeek(week).then(() => { if (isActive()) { setReadyWeek(week); setFailedWeek(''); } })
-      .catch(() => { if (isActive()) setFailedWeek(week); });
+      .catch(cause => { if (isActive()) { setFailedWeek(week); setWeekError(cause instanceof TimetableActionError ? cause.message : '주간 계획을 불러오지 못했습니다.'); } });
   }, [ensureWeek, week]);
 
   useFocusEffect(useCallback(() => {
@@ -69,7 +71,7 @@ export function PlanningScreen({ presetId, headerAction, templateToolbar }: { pr
       : <View style={styles.nav}><Action label="‹" accessibilityLabel="이전 주" onPress={() => setSelectedDate(addDays(selectedDate, -7))} /><Text numberOfLines={1} style={styles.range}>{weekTitle(week)}</Text><Action label="›" accessibilityLabel="다음 주" onPress={() => setSelectedDate(addDays(selectedDate, 7))} /><Action label="이번 주" onPress={() => setSelectedDate(dateKey())} /></View>}
     {template || readyWeek === week ? <TimetableGrid key={template ? presetId : week} events={events} weekStart={template ? templateWeek : week} template={template} selectedDay={selectedDay}
       onSelectDay={day => template ? setTemplateDay(day) : setSelectedDate(addDays(week, day))} onCreate={create} onEdit={edit} onChange={change} onResize={resize} onPaste={paste} onDelete={remove} />
-      : <View style={styles.loading}>{failedWeek === week ? <><Text style={styles.templateDescription}>주간 계획을 불러오지 못했습니다.</Text><Action label="다시 시도" onPress={() => { void loadWeek(); }} /></> : <ActivityIndicator color={palette.blue} />}</View>}
+      : <View style={styles.loading}>{failedWeek === week ? <><Text style={styles.templateDescription}>{weekError}</Text><Action label="다시 시도" onPress={() => { void loadWeek(); }} /><Action label="설정" onPress={() => router.push('/settings')} /></> : <ActivityIndicator color={palette.blue} />}</View>}
     {draft && <EventEditor template={template} draft={draft} onClose={() => setDraft(null)} onSave={template ? (value, id) => calendar.saveTemplate(value, id, presetId) : calendar.saveEvent} onDelete={remove} />}
   </Screen>;
 }

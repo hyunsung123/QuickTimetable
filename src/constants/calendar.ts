@@ -12,6 +12,6 @@ export const palette = {
 export const eventColors = ['#426FD0', '#4F8A72', '#A77450', '#9875BD', '#C3657D', '#558C9E'];
 export const weekdays = ['월', '화', '수', '목', '금', '토', '일'];
 export const slotMinutes = 30;
-export const slotHeight = 44;
+export const slotHeight = 26;
 export const dayMinutes = 1440;
 export const personalCalendarId = 'personal';

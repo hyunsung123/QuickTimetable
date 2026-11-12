@@ -21,7 +21,7 @@ for (const name of ['onBegin', 'onStart', 'onUpdate', 'onEnd', 'onFinalize']) {
 
 function createUiHarness({ calendar, repository, safeAreaInsets = { top: 44, bottom: 34, left: 0, right: 0 } } = {}) {
   const cache = new Map();
-  const animations = [], sharedValues = [], navigation = [], focusCleanups = new Set();
+  const animations = [], sharedValues = [], navigation = [], haptics = [], focusCleanups = new Set();
   const View = React.forwardRef(function NativeView(props, ref) {
     React.useImperativeHandle(ref, () => ({ measureInWindow: callback => callback(80, 240, 100, 88), scrollTo: () => {} }), []);
     return React.createElement('View', props, props.children);
@@ -58,7 +58,7 @@ function createUiHarness({ calendar, repository, safeAreaInsets = { top: 44, bot
       router: Object.fromEntries(['push', 'replace', 'back'].map(method => [method, (...args) => navigation.push({ method, args })])),
       useFocusEffect: callback => React.useEffect(() => { const cleanup = callback(); if (cleanup) focusCleanups.add(cleanup); return () => { focusCleanups.delete(cleanup); cleanup?.(); }; }, [callback]),
     },
-    '@/lib/haptics': { selectionHaptic: () => {} },
+    '@/lib/haptics': { selectionHaptic: () => haptics.push('selection'), rejectionHaptic: () => haptics.push('rejection') },
     '@/lib/database': { getRepository: async () => repository },
     ...(calendar ? { '@/hooks/use-calendar': { useCalendar: () => calendar } } : {}),
   };
@@ -87,7 +87,7 @@ function createUiHarness({ calendar, repository, safeAreaInsets = { top: 44, bot
     instance._compile(compiled, path);
     return instance.exports;
   }
-  return { React, TestRenderer, load, animations, sharedValues, navigation, blur: () => { for (const cleanup of focusCleanups) cleanup(); } };
+  return { React, TestRenderer, load, animations, sharedValues, navigation, haptics, blur: () => { for (const cleanup of focusCleanups) cleanup(); } };
 }
 
 module.exports = { createUiHarness };

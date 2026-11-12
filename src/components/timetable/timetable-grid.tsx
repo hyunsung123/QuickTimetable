@@ -5,7 +5,7 @@ import { useFocusEffect } from 'expo-router';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { palette, slotHeight, weekdays } from '@/constants/calendar';
 import { addDays, dateKey, formatTime, parseDate } from '@/lib/dates';
-import { clamp, copyEvent, eventLanes, TimetableActionError } from '@/lib/timetable';
+import { clamp, conflictingEventIds, copyEvent, TimetableActionError } from '@/lib/timetable';
 import { holdDurationMs, pressMovementTolerance } from '@/lib/timetable-press';
 import { selectionHaptic } from '@/lib/haptics';
 import { useCalendar } from '@/hooks/use-calendar';
@@ -48,7 +48,10 @@ export function TimetableGrid({ events, weekStart, template = false, readOnly = 
   const drag = useTimetableDrag(events, dayWidth, slotHeight, onChange, onResize, showError);
   const { dragging, visibleEvents } = drag;
   const busy = pasting || drag.saving;
-  const lanes = useMemo(() => eventLanes(visibleEvents), [visibleEvents]);
+  const legacyConflicts = useMemo(() => {
+    const ids = conflictingEventIds(events);
+    return events.filter(event => ids.has(event.id));
+  }, [events]);
   const activeEvent = visibleEvents.find(event => event.id === drag.activeId);
   const previewTime = activeEvent ? `${weekdays[activeEvent.day]}요일 ${formatTime(activeEvent.startMinute)} – ${formatTime(activeEvent.endMinute)}` : '';
   const today = dateKey();
@@ -112,6 +115,12 @@ export function TimetableGrid({ events, weekStart, template = false, readOnly = 
       <View style={styles.segmented}>{[false, true].map(value => <Pressable key={String(value)} accessibilityRole="button" accessibilityState={{ selected: expanded === value }} onPress={() => setExpanded(value)} style={[styles.segment, expanded === value && styles.segmentActive]}><Text style={[styles.segmentText, expanded === value && { color: palette.blue }]}>{value ? '확대 편집' : '주 전체'}</Text></Pressable>)}</View>
       <Text style={styles.modeHint}>{expanded ? '좌우로 밀어 요일 이동' : '월요일 – 일요일'}</Text>
     </View>
+    {!!legacyConflicts.length && <View style={styles.conflicts}>
+      <Text style={styles.conflictText}>기존에 겹친 일정이 있어요.{!readOnly && ' 아래에서 일정을 선택해 시간을 수정해 주세요.'}</Text>
+      {!readOnly && <ScrollView style={{ maxHeight: 76 }}><View style={styles.conflictList}>{legacyConflicts.map(event => <Pressable key={event.id} accessibilityRole="button" accessibilityLabel={`겹친 일정 ${event.title} 편집`} disabled={busy || dragging} onPress={() => onEdit(event.id)} style={styles.conflictItem}>
+        <Text numberOfLines={1} style={styles.conflictText}>{event.title} · {weekdays[event.day]} {formatTime(event.startMinute)}–{formatTime(event.endMinute)}</Text>
+      </Pressable>)}</View></ScrollView>}
+    </View>}
     {width > rulerWidth && <>
       <View style={styles.header}>
         <View style={{ width: rulerWidth }}><Text style={styles.rulerTitle}>시간</Text></View>
@@ -140,8 +149,9 @@ export function TimetableGrid({ events, weekStart, template = false, readOnly = 
                       {Array.from({ length: 49 }, (_, i) => <View key={i} pointerEvents="none" style={[styles.line, { top: i * slotHeight }, i % 2 === 1 && styles.halfLine]} />)}
                     </View>
                   </GestureDetector>
-                  {visibleEvents.map(event => <EventBlock key={event.id} event={event} dayWidth={dayWidth} {...(lanes.get(event.id) ?? { lane: 0, lanes: 1 })} scrollGestures={scrollGestures} onEdit={onEdit}
+                  {visibleEvents.map(event => <EventBlock key={event.id} event={event} dayWidth={dayWidth} scrollGestures={scrollGestures} onEdit={onEdit}
                     active={event.id === drag.activeId && drag.activeMode === 'move'} selected={menu?.kind === 'copy' && menu.id === event.id}
+                    blocked={event.id === drag.activeId && drag.blocked}
                     disabled={readOnly || busy || dragging && drag.activeId !== event.id}
                     onCopy={(id, anchor) => setMenu({ kind: 'copy', id, anchor })}
                     onBegin={(id, mode) => { setMenu(null); setNotice(''); return drag.begin(id, mode); }} onUpdate={drag.update} onEnd={drag.end} />)}
@@ -153,7 +163,7 @@ export function TimetableGrid({ events, weekStart, template = false, readOnly = 
       </View>
     </>}
     {!!notice && <View accessibilityRole="alert" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text><Pressable accessibilityRole="button" accessibilityLabel="안내 닫기" onPress={() => setNotice('')} style={styles.noticeClose}><Text style={{ color: palette.blue }}>닫기</Text></Pressable></View>}
-    <View style={styles.footer}><Text style={styles.footerText}>{readOnly ? '미리보기' : drag.blocked ? '겹치는 일정이 있어 이 경계선은 더 조절할 수 없어요.' : dragging ? previewTime || '30분 단위로 조절 중 · 놓으면 저장' : busy ? '저장 중…' : '길게 눌러 복사·삭제 · 누른 채 이동 · 경계선 조절'}</Text></View>
+    <View style={styles.footer}><Text style={styles.footerText}>{readOnly ? '미리보기' : drag.blocked ? drag.activeMode === 'move' ? '이 시간에는 배치할 수 없어요. 놓으면 원래 위치로 돌아가요.' : '겹치는 일정이 있어 이 경계선은 더 조절할 수 없어요.' : dragging ? `${previewTime}${drag.shortened ? ' · 빈 공간에 맞춰 축소' : ''}` : busy ? '저장 중…' : '길게 눌러 복사·삭제 · 누른 채 이동 · 경계선 조절'}</Text></View>
     {menu && <TimetableContextMenu kind={menu.kind} anchor={menu.anchor} onCopy={() => { void menuAction(); }} onPaste={() => { void menuAction(); }} onDelete={deleteAction} onClose={() => { if (!pasteLock.current) setMenu(null); }} />}
   </View>;
 }
@@ -170,4 +180,6 @@ const styles = StyleSheet.create({
   column: { position: 'absolute', borderLeftWidth: 1, borderColor: palette.line }, line: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: '#DFE5ED' }, halfLine: { backgroundColor: '#EFF2F6' },
   footer: { paddingVertical: 11, paddingHorizontal: 12, borderTopWidth: 1, borderColor: palette.line }, footerText: { color: palette.muted, fontSize: 10, textAlign: 'center' },
   notice: { flexDirection: 'row', alignItems: 'center', paddingLeft: 16, backgroundColor: palette.blueLight }, noticeText: { flex: 1, color: palette.text, fontSize: 12, lineHeight: 19, paddingVertical: 10 }, noticeClose: { minHeight: 44, paddingHorizontal: 16, justifyContent: 'center' },
+  conflicts: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#FFF4F4', gap: 4 }, conflictText: { color: '#A53648', fontSize: 11, lineHeight: 16 },
+  conflictList: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 }, conflictItem: { paddingHorizontal: 8, minHeight: 32, justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth, borderColor: '#EBC7CD', borderRadius: 6, maxWidth: '100%' },
 });

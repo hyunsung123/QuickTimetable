@@ -106,7 +106,7 @@ export class CalendarRepository {
         return row;
       });
       const sameDay = (a: CalendarEvent & TimetableTemplate, b: CalendarEvent & TimetableTemplate) =>
-        a.calendarId === b.calendarId && (table === 'events' ? a.date === b.date : a.presetId === b.presetId && a.weekday === b.weekday);
+        table === 'events' ? a.date === b.date : a.presetId === b.presetId && a.weekday === b.weekday;
       const byId = new Map(changes.map(change => [change.id, change]));
       if (originals.length === 2) {
         const [upper, lower] = [...originals].sort((a, b) => a.startMinute - b.startMinute);
@@ -144,10 +144,9 @@ export class CalendarRepository {
   pasteEvent(clipboard: EventClipboard, date: string, startMinute: number): Promise<Snapshot> {
     return this.serial(() => this.transaction(async () => {
       parseDate(date);
-      const input = pastedEvent(clipboard, startMinute);
+      const others = await this.db.getAllAsync<CalendarEvent>('SELECT * FROM events WHERE date = ?', date);
+      const input = pastedEvent(clipboard, startMinute, others);
       validateTime(input);
-      const conflicts = await this.db.getAllAsync(`SELECT id FROM events WHERE calendarId = 'personal' AND date = ? AND startMinute < ? AND endMinute > ?`, date, input.endMinute, startMinute);
-      if (conflicts.length) throw new TimetableActionError('해당 시간에 다른 일정이 있어 붙여넣기를 취소했습니다.');
       const now = new Date().toISOString();
       await this.db.runAsync(`INSERT INTO events (id, calendarId, title, date, startMinute, endMinute, color, createdAt, updatedAt, templateId)
         VALUES (?, 'personal', ?, ?, ?, ?, ?, ?, ?, NULL)`,
@@ -160,10 +159,9 @@ export class CalendarRepository {
     return this.serial(() => this.transaction(async () => {
       const preset = await this.requirePreset(presetId);
       if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw new TimetableActionError('요일을 다시 선택해 주세요.');
-      const input = pastedEvent(clipboard, startMinute);
+      const others = await this.db.getAllAsync<TimetableTemplate>('SELECT * FROM templates WHERE presetId = ? AND weekday = ?', preset.id, weekday);
+      const input = pastedEvent(clipboard, startMinute, others);
       validateTime(input);
-      const conflicts = await this.db.getAllAsync(`SELECT id FROM templates WHERE presetId = ? AND weekday = ? AND startMinute < ? AND endMinute > ?`, preset.id, weekday, input.endMinute, startMinute);
-      if (conflicts.length) throw new TimetableActionError('해당 시간에 다른 일정이 있어 붙여넣기를 취소했습니다.');
       const now = new Date().toISOString();
       await this.db.runAsync(`INSERT INTO templates (id, presetId, calendarId, title, weekday, startMinute, endMinute, color, createdAt, updatedAt)
         VALUES (?, ?, 'personal', ?, ?, ?, ?, ?, ?, ?)`,
@@ -225,6 +223,8 @@ export class CalendarRepository {
     return this.serial(() => this.transaction(async () => {
       validateTime(input);
       parseDate(input.date);
+      const rows = await this.db.getAllAsync<CalendarEvent>('SELECT * FROM events WHERE date = ?', input.date);
+      this.assertFreeTime(input, rows, id);
       const now = new Date().toISOString();
       await this.db.runAsync(`INSERT INTO events (id, calendarId, title, date, startMinute, endMinute, color, createdAt, updatedAt, templateId)
         VALUES (?, 'personal', ?, ?, ?, ?, ?, ?, ?, NULL)
@@ -247,6 +247,16 @@ export class CalendarRepository {
     await this.db.runAsync('INSERT OR IGNORE INTO initialized_weeks VALUES (?, ?)', mondayOf(date), now);
   }
 
+  /** Preserve legacy overlaps verbatim; a title/color-only edit is safe. Any
+   * new time/date/day must be completely free. Checks run inside the write tx. */
+  private assertFreeTime(input: { startMinute: number; endMinute: number }, rows: { id: string; startMinute: number; endMinute: number }[], id?: string) {
+    const original = rows.find(row => row.id === id);
+    if (original?.startMinute === input.startMinute && original.endMinute === input.endMinute) return;
+    if (rows.some(row => row.id !== id && overlaps(input, row))) {
+      throw new TimetableActionError('해당 시간에 다른 일정이 있습니다. 겹치지 않는 시간을 선택해 주세요.');
+    }
+  }
+
   private async requirePreset(id?: string) {
     const rows = await this.db.getAllAsync<TimetablePreset>(id === undefined
       ? 'SELECT * FROM timetable_presets ORDER BY isDefault DESC, createdAt, rowid LIMIT 1'
@@ -264,6 +274,8 @@ export class CalendarRepository {
         const rows = await this.db.getAllAsync<TimetableTemplate>('SELECT * FROM templates WHERE id = ?', id);
         if (rows[0] && rows[0].presetId !== preset.id) throw new TimetableActionError('다른 시간표의 일정은 수정할 수 없습니다.');
       }
+      const rows = await this.db.getAllAsync<TimetableTemplate>('SELECT * FROM templates WHERE presetId = ? AND weekday = ?', preset.id, input.weekday);
+      this.assertFreeTime(input, rows, id);
       const now = new Date().toISOString();
       await this.db.runAsync(`INSERT INTO templates (id, presetId, calendarId, title, weekday, startMinute, endMinute, color, createdAt, updatedAt)
         VALUES (?, ?, 'personal', ?, ?, ?, ?, ?, ?, ?)
@@ -294,11 +306,21 @@ export class CalendarRepository {
   }
 
   private async insertImportedRows(presetId: string, rows: TemplateInput[]) {
+    this.validateImportedRows(rows);
     const now = new Date().toISOString();
     for (const row of rows) {
       validateTime(row);
       await this.db.runAsync(`INSERT INTO templates (id, presetId, calendarId, title, weekday, startMinute, endMinute, color, createdAt, updatedAt)
         VALUES (?, ?, 'personal', ?, ?, ?, ?, ?, ?, ?)`, newId(), presetId, row.title, row.weekday, row.startMinute, row.endMinute, row.color, now, now);
+    }
+  }
+
+  private validateImportedRows(rows: TemplateInput[], message = '불러올 시간표에 겹치는 일정이 있습니다. 원본에서 시간을 수정한 뒤 다시 불러와 주세요.') {
+    for (let i = 0; i < rows.length; i++) {
+      validateTime(rows[i]);
+      if (rows.slice(0, i).some(row => row.weekday === rows[i].weekday && overlaps(row, rows[i]))) {
+        throw new TimetableActionError(message);
+      }
     }
   }
 
@@ -344,6 +366,7 @@ export class CalendarRepository {
     return this.serial(() => this.transaction(async () => {
       await this.requirePreset(id);
       const rows = await this.importRows(source);
+      this.validateImportedRows(rows);
       await this.db.runAsync('DELETE FROM templates WHERE presetId = ?', id);
       await this.insertImportedRows(id, rows);
       await this.db.runAsync('UPDATE timetable_presets SET updatedAt = ? WHERE id = ?', new Date().toISOString(), id);
@@ -360,6 +383,9 @@ export class CalendarRepository {
           JOIN timetable_presets ON templates.presetId = timetable_presets.id
           WHERE timetable_presets.isDefault = 1 AND timetable_presets.applyFromWeek IS NOT NULL AND timetable_presets.applyFromWeek <= ?`, week);
         const now = new Date().toISOString();
+        // Legacy presets may contain overlaps. Refuse the entire copy rather
+        // than choosing a winner, altering the preset, or creating new clashes.
+        this.validateImportedRows(templates, '기본 시간표에 겹치는 일정이 있습니다. 기본 시간표에서 시간을 수정한 뒤 다시 시도해 주세요.');
         for (const template of templates) {
           await this.db.runAsync(`INSERT INTO events (id, calendarId, title, date, startMinute, endMinute, color, createdAt, updatedAt, templateId)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

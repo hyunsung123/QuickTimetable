@@ -8,17 +8,40 @@ export class TimetableActionError extends Error {}
 export const overlaps = (a: { startMinute: number; endMinute: number }, b: { startMinute: number; endMinute: number }) =>
   a.startMinute < b.endMinute && a.endMinute > b.startMinute;
 
+type TimeRange = { startMinute: number; endMinute: number };
+
+/** Only move/paste may shorten a duration. An occupied start never fits.
+ * Callers scope the rows to one date or one preset/weekday and exclude self. */
+export function fitInFreeSpace(others: TimeRange[], startMinute: number, durationMinute: number) {
+  const proposed = { startMinute, endMinute: Math.min(1440, startMinute + durationMinute) };
+  if (!Number.isInteger(startMinute) || startMinute < 0 || startMinute > 1410 || startMinute % 30 ||
+      !Number.isInteger(durationMinute) || durationMinute < 30 || durationMinute % 30 ||
+      others.some(event => event.startMinute <= startMinute && startMinute < event.endMinute)) {
+    return { ...proposed, blocked: true, shortened: false };
+  }
+  const nextStart = Math.min(1440, ...others.filter(event => event.startMinute > startMinute).map(event => event.startMinute));
+  const duration = Math.min(durationMinute, Math.floor((nextStart - startMinute) / 30) * 30);
+  return { startMinute, endMinute: startMinute + duration, blocked: duration < 30, shortened: duration < durationMinute };
+}
+
+export function conflictingEventIds(events: GridEvent[]): Set<string> {
+  const result = new Set<string>();
+  for (let i = 0; i < events.length; i++) for (let j = i + 1; j < events.length; j++) {
+    if (events[i].day === events[j].day && overlaps(events[i], events[j])) {
+      result.add(events[i].id); result.add(events[j].id);
+    }
+  }
+  return result;
+}
+
 export function copyEvent(event: Pick<GridEvent, 'title' | 'color' | 'startMinute' | 'endMinute'>): EventClipboard {
   return { title: event.title, color: event.color, durationMinute: event.endMinute - event.startMinute };
 }
 
-export function pastedEvent(clipboard: EventClipboard, startMinute: number) {
-  const endMinute = startMinute + clipboard.durationMinute;
-  if (!Number.isInteger(startMinute) || startMinute < 0 || startMinute % 30 ||
-      !Number.isInteger(clipboard.durationMinute) || clipboard.durationMinute < 30 || clipboard.durationMinute % 30 || endMinute > 1440) {
-    throw new TimetableActionError('일정 길이를 유지하며 붙여넣을 수 없습니다. 자정 이전의 다른 시간을 선택해 주세요.');
-  }
-  return { title: clipboard.title, color: clipboard.color, startMinute, endMinute };
+export function pastedEvent(clipboard: EventClipboard, startMinute: number, others: TimeRange[] = []) {
+  const result = fitInFreeSpace(others, startMinute, clipboard.durationMinute);
+  if (result.blocked) throw new TimetableActionError('해당 시간에 다른 일정이 있거나 빈 공간이 30분보다 짧아 붙여넣을 수 없습니다.');
+  return { title: clipboard.title, color: clipboard.color, startMinute, endMinute: result.endMinute };
 }
 
 export interface BoundaryResizeResult {
@@ -84,6 +107,7 @@ export interface TimetableDragSession {
   movedEvent?: GridEvent;
   linkedId?: string;
   blocked: boolean;
+  shortened?: boolean;
 }
 
 export function beginTimetableDrag(events: GridEvent[], id: string, mode: DragMode): TimetableDragSession {
@@ -93,21 +117,32 @@ export function beginTimetableDrag(events: GridEvent[], id: string, mode: DragMo
 export function updateTimetableDrag(session: TimetableDragSession, deltaX: number, deltaY: number, dayWidth: number, slotHeight: number): TimetableDragSession {
   const event = session.original.find(value => value.id === session.id);
   if (!event) return session;
-  if (session.mode === 'move') return { ...session, movedEvent: dragEvent(event, 'move', deltaX, deltaY, dayWidth, slotHeight) };
+  if (session.mode === 'move') {
+    const candidate = dragEvent(event, 'move', deltaX, deltaY, dayWidth, slotHeight);
+    const others = session.original.filter(value => value.id !== event.id && value.day === candidate.day);
+    const result = fitInFreeSpace(others, candidate.startMinute, event.endMinute - event.startMinute);
+    return { ...session, movedEvent: { ...candidate, endMinute: result.endMinute }, blocked: result.blocked, shortened: result.shortened };
+  }
   const result = resizeBoundary(session.original, session.id, session.mode, deltaY / slotHeight * 30, session.linkedId);
   return { ...session, ...result };
 }
 
 export function finishTimetableDrag(session: TimetableDragSession, success: boolean) {
+  if (session.mode === 'move' && session.blocked) success = false;
   const changes = success ? session.changes : [];
   const movedEvent = success ? session.movedEvent : undefined;
+  return { events: previewTimetableDrag({ ...session, changes, movedEvent }), changes, movedEvent };
+}
+
+/** Invalid destinations remain visible as red ghosts, but cannot be committed. */
+export function previewTimetableDrag(session: TimetableDragSession): GridEvent[] {
+  const { changes, movedEvent } = session;
   const byId = new Map(changes.map(change => [change.id, change]));
-  const events = session.original.map(event => {
+  return session.original.map(event => {
     if (movedEvent?.id === event.id) return movedEvent;
     const change = byId.get(event.id);
     return change ? { ...event, startMinute: change.startMinute, endMinute: change.endMinute } : event;
   });
-  return { events, changes, movedEvent };
 }
 
 export function dragEvent(event: GridEvent, mode: DragMode, deltaX: number, deltaY: number, dayWidth: number, slotHeight: number): GridEvent {
@@ -115,33 +150,6 @@ export function dragEvent(event: GridEvent, mode: DragMode, deltaX: number, delt
   if (mode === 'start') return { ...event, startMinute: clamp(event.startMinute + delta, 0, event.endMinute - 30) };
   if (mode === 'end') return { ...event, endMinute: clamp(event.endMinute + delta, event.startMinute + 30, 1440) };
   const duration = event.endMinute - event.startMinute;
-  const startMinute = clamp(event.startMinute + delta, 0, 1440 - duration);
-  return { ...event, day: clamp(event.day + Math.round(deltaX / dayWidth), 0, 6), startMinute, endMinute: startMinute + duration };
-}
-
-// Give every overlapping event its own lane so it remains tappable.
-export function eventLanes(events: GridEvent[]): Map<string, { lane: number; lanes: number }> {
-  const result = new Map<string, { lane: number; lanes: number }>();
-  for (let day = 0; day < 7; day++) {
-    const sorted = events.filter(event => event.day === day).sort((a, b) => a.startMinute - b.startMinute || a.endMinute - b.endMinute || a.id.localeCompare(b.id));
-    let group: GridEvent[] = [];
-    let groupEnd = -1;
-    const flush = () => {
-      const ends: number[] = [];
-      for (const event of group) {
-        let lane = ends.findIndex(end => end <= event.startMinute);
-        if (lane < 0) lane = ends.length;
-        ends[lane] = event.endMinute;
-        result.set(event.id, { lane, lanes: 1 });
-      }
-      for (const event of group) result.get(event.id)!.lanes = ends.length;
-    };
-    for (const event of sorted) {
-      if (event.startMinute >= groupEnd && group.length) { flush(); group = []; groupEnd = -1; }
-      group.push(event);
-      groupEnd = Math.max(groupEnd, event.endMinute);
-    }
-    flush();
-  }
-  return result;
+  const startMinute = clamp(event.startMinute + delta, 0, 1410);
+  return { ...event, day: clamp(event.day + Math.round(deltaX / dayWidth), 0, 6), startMinute, endMinute: Math.min(1440, startMinute + duration) };
 }

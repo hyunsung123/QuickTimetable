@@ -46,7 +46,7 @@ test('EventBlock callbacks distinguish short tap, stationary hold release, real 
   await act(async () => {
     pan.callbacks.onBegin(); pan.callbacks.onStart();
     pan.callbacks.onUpdate({ translationX: 0, translationY: 10 });
-    pan.callbacks.onUpdate({ translationX: 100, translationY: 44 });
+    pan.callbacks.onUpdate({ translationX: 100, translationY: 26 });
     pan.callbacks.onUpdate({ translationX: 0, translationY: 0 });
     pan.callbacks.onFinalize({}, true);
     hold.callbacks.onEnd({ duration: 800 }, true);
@@ -84,7 +84,7 @@ test('grid renders both resized blocks live; cancellation restores both and perf
   const ui = await mountedGrid({ props: { onResize: async changes => writes.push(changes) } });
   const { renderer, EventBlock, TestRenderer: { act } } = ui;
   let pan = blockPart(renderer, EventBlock, 'A', 2).Pan;
-  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: 44 }); });
+  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: 26 }); });
   const visible = renderer.root.findAllByType(EventBlock).map(node => node.props.event);
   assert.equal(visible[0].endMinute, 630);
   assert.equal(visible[1].startMinute, 630);
@@ -93,7 +93,7 @@ test('grid renders both resized blocks live; cancellation restores both and perf
   assert.deepEqual(renderer.root.findAllByType(EventBlock).map(node => node.props.event), events);
   assert.equal(writes.length, 0);
   pan = blockPart(renderer, EventBlock, 'B', 0).Pan;
-  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: -44 }); pan.callbacks.onFinalize({}, true); });
+  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: -26 }); pan.callbacks.onFinalize({}, true); });
   assert.deepEqual(writes[0], resizeBoundary(events, 'B', 'start', -30).changes);
   await act(async () => renderer.unmount());
 });
@@ -102,7 +102,7 @@ test('failed resize restores both visible blocks and shows a Korean save error',
   const ui = await mountedGrid({ props: { onResize: async () => { throw new Error('disk failure'); } } });
   const { renderer, EventBlock, TestRenderer: { act } } = ui;
   const pan = blockPart(renderer, EventBlock, 'A', 2).Pan;
-  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: 44 }); pan.callbacks.onFinalize({}, true); });
+  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: 26 }); pan.callbacks.onFinalize({}, true); });
   assert.deepEqual(renderer.root.findAllByType(EventBlock).map(node => node.props.event), events);
   assert(renderer.root.findAllByType('Text').some(node => String(node.props.children).includes('저장하지 못했습니다')));
   await act(async () => renderer.unmount());
@@ -113,13 +113,13 @@ test('blank tap creates; hold without clipboard is disabled; cancelled scroll ne
   const ui = await mountedGrid({ props: { onCreate: (...args) => creates.push(args), onPaste: async (...args) => pastes.push(args) } });
   const { renderer, TestRenderer: { act }, TimetableContextMenu } = ui;
   assert.equal(backdrop(renderer).LongPress.config.enabled, false);
-  await act(async () => backdrop(renderer).Tap.callbacks.onEnd({ x: 50, y: 18 * 44 }, true));
+  await act(async () => backdrop(renderer).Tap.callbacks.onEnd({ x: 50, y: 18 * 26 }, true));
   assert.deepEqual(creates, [[1, 540]]);
   ui.calendar.clipboard = copyEvent(events[0]);
   await act(async () => renderer.update(ui.React.createElement(ui.TimetableGrid, { ...ui.props })));
   assert.equal(backdrop(renderer).LongPress.config.enabled, true);
   assert.equal(backdrop(renderer).LongPress.config.maxDistance, 8);
-  const point = { x: 50, y: 20 * 44, absoluteX: 98, absoluteY: 400 };
+  const point = { x: 50, y: 20 * 26, absoluteX: 98, absoluteY: 400 };
   await act(async () => backdrop(renderer).LongPress.callbacks.onEnd(point, false));
   assert.equal(renderer.root.findAllByType(TimetableContextMenu).length, 0);
   await act(async () => backdrop(renderer).LongPress.callbacks.onEnd(point, true));
@@ -158,7 +158,7 @@ test('paste collision closes the menu, reports the conflict and keeps every orig
     props: { onPaste: async () => { throw new TimetableActionError(message); } },
   });
   const { renderer, EventBlock, TimetableContextMenu, TestRenderer: { act } } = ui;
-  await act(async () => backdrop(renderer).LongPress.callbacks.onEnd({ x: 1, y: 540 / 30 * 44, absoluteX: 49, absoluteY: 400 }, true));
+  await act(async () => backdrop(renderer).LongPress.callbacks.onEnd({ x: 1, y: 540 / 30 * 26, absoluteX: 49, absoluteY: 400 }, true));
   await act(async () => renderer.root.findByType(TimetableContextMenu).props.onPaste());
   assert.equal(renderer.root.findAllByType(TimetableContextMenu).length, 0);
   assert(renderer.root.findAllByType('Text').some(node => node.props.children === message));
@@ -227,9 +227,9 @@ test('press feedback animates immediately, recognizes hold, follows unsnapped mo
   assert.equal(sharedValues[0].value, 0.985); assert.equal(sharedValues[1].value, 1.5);
   await act(async () => part.Pan.callbacks.onUpdate({ translationX: 12.5, translationY: 45.5 }));
   assert.equal(sharedValues[0].value, 1.015); assert.equal(sharedValues[2].value, 1);
-  assert.equal(sharedValues[3].value, 12.5); assert.equal(sharedValues[4].value, 45.5);
+  assert.equal(sharedValues[3].value, 14.5); assert.equal(sharedValues[4].value, 540 / 30 * 26 + 1 + 45.5);
   await act(async () => { part.Pan.callbacks.onFinalize({}, true); part.LongPress.callbacks.onEnd({ duration: 700 }, true); });
-  assert.equal(sharedValues[0].value, 1); assert.equal(sharedValues[2].value, 0); assert.equal(sharedValues[4].value, 0);
+  assert.equal(sharedValues[0].value, 1); assert.equal(sharedValues[2].value, 0); assert.equal(sharedValues[4].value, 540 / 30 * 26 + 1);
   assert.equal(copies.length, 0); assert.deepEqual(ends, [['A', true]]);
   part = blockPart(renderer, EventBlock, 'A');
   await act(async () => { part.Pan.callbacks.onBegin(); part.LongPress.callbacks.onStart(); ui.blur(); });
@@ -294,7 +294,7 @@ test('leaving a screen during shared resizing restores both blocks and never com
   const ui = await mountedGrid({ props: { onResize: async changes => writes.push(changes) } });
   const { act } = ui.TestRenderer;
   const pan = blockPart(ui.renderer, ui.EventBlock, 'A', 2).Pan;
-  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: 44 }); });
+  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: 26 }); });
   assert.equal(ui.renderer.root.findAllByType(ui.EventBlock)[0].props.event.endMinute, 630);
   await act(async () => ui.blur());
   assert.deepEqual(ui.renderer.root.findAllByType(ui.EventBlock).map(node => node.props.event), events);
@@ -404,4 +404,181 @@ test('new timetable import can clone a saved preset without changing its source 
   assert.equal(ui.navigation.at(-1).method, 'replace');
   assert.equal(ui.navigation.at(-1).args[0].pathname, '/preset-editor');
   await act(async () => ui.renderer.unmount());
+});
+
+const placementEvents = [
+  { ...events[0], startMinute: 660, endMinute: 720 },
+  { ...events[1], startMinute: 780, endMinute: 840 },
+  { ...events[2], startMinute: 900, endMinute: 1020 },
+];
+const flatStyle = style => Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+function blockView(renderer, EventBlock, id) {
+  const block = renderer.root.findAllByType(EventBlock).find(node => node.props.event.id === id);
+  return block.findAllByType('View').find(node => flatStyle(node.props.style).position === 'absolute');
+}
+
+test('occupied-start move displays a full-width red ghost; release restores the block with no save and failure feedback', async () => {
+  for (const minute of [660, 690]) {
+    const writes = [];
+    const ui = await mountedGrid({ props: { events: placementEvents, onChange: async value => writes.push(value) } });
+    const { act } = ui.TestRenderer;
+    const pan = blockPart(ui.renderer, ui.EventBlock, 'C').Pan;
+    await act(async () => {
+      pan.callbacks.onBegin(); pan.callbacks.onStart();
+      pan.callbacks.onUpdate({ translationX: 0, translationY: (minute - 900) / 30 * 26 });
+    });
+    const ghost = ui.renderer.root.findAllByType(ui.EventBlock).find(node => node.props.event.id === 'C');
+    assert.equal(ghost.props.blocked, true);
+    const style = flatStyle(blockView(ui.renderer, ui.EventBlock, 'C').props.style);
+    assert.equal(style.width, ghost.props.dayWidth - 4);
+    assert.equal(style.borderColor, '#C63245'); assert.equal(style.opacity, 0.58);
+    assert.deepEqual(ui.renderer.root.findAllByType(ui.EventBlock).slice(0, 2).map(node => node.props.event), placementEvents.slice(0, 2));
+    await act(async () => pan.callbacks.onFinalize({}, true));
+    assert.deepEqual(writes, []);
+    assert.deepEqual(ui.renderer.root.findAllByType(ui.EventBlock).map(node => node.props.event), placementEvents);
+    assert(ui.haptics.includes('rejection'));
+    assert(ui.animations.some(value => value.kind === 'spring' && value.value === 900 / 30 * 26 + 1));
+    await act(async () => ui.renderer.unmount());
+  }
+});
+
+for (const template of [false, true]) test(`${template ? 'preset' : 'dated'} move previews a shortened height, then persists only that block at the fitted time`, async t => {
+  const repo = repository(t); const preset = (await repo.initialize()).presets[0].id;
+  for (const event of placementEvents) {
+    if (template) await repo.saveTemplate({ ...event, weekday: 0 }, event.id, preset);
+    else await repo.saveEvent({ ...event, date: '2026-11-16' }, event.id);
+  }
+  const before = await repo.initialize();
+  let ui;
+  const props = { template, events: placementEvents, onChange: async value => {
+    const after = template ? await repo.saveTemplate({ ...value, weekday: value.day }, value.id, preset)
+      : await repo.saveEvent({ ...value, date: '2026-11-16' }, value.id);
+    props.events = (template ? after.templates : after.events).map(row => ({ ...row, day: template ? row.weekday : 0 }));
+    ui.renderer.update(ui.React.createElement(ui.TimetableGrid, props));
+  } };
+  ui = await mountedGrid({ props });
+  Object.assign(props, ui.props);
+  const { act } = ui.TestRenderer;
+  const pan = blockPart(ui.renderer, ui.EventBlock, 'C').Pan;
+  await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: -156 }); });
+  const preview = ui.renderer.root.findAllByType(ui.EventBlock).find(node => node.props.event.id === 'C').props;
+  assert.equal(preview.event.startMinute, 720); assert.equal(preview.event.endMinute, 780);
+  assert.equal(preview.blocked, false);
+  assert(ui.renderer.root.findAllByType('Text').some(node => String(node.props.children).includes('빈 공간에 맞춰 축소')));
+  // Shared values update in the effect; render once to inspect the animated style.
+  await act(async () => ui.renderer.update(ui.React.createElement(ui.TimetableGrid, props)));
+  assert.equal(flatStyle(blockView(ui.renderer, ui.EventBlock, 'C').props.style).height, 50);
+  await act(async () => pan.callbacks.onFinalize({}, true));
+  const after = await repo.initialize(); const saved = (template ? after.templates : after.events).find(row => row.id === 'C');
+  assert.equal(saved.startMinute, 720); assert.equal(saved.endMinute, 780);
+  const original = (template ? before.templates : before.events).find(row => row.id === 'C');
+  for (const key of ['id', 'title', 'color', 'createdAt']) assert.equal(saved[key], original[key]);
+  assert.deepEqual((template ? after.templates : after.events).filter(row => row.id !== 'C'), (template ? before.templates : before.events).filter(row => row.id !== 'C'));
+  await act(async () => ui.renderer.unmount());
+});
+
+test('cancelled or failed shortened moves restore both original position and original height', async () => {
+  for (const success of [false, true]) {
+    let writes = 0;
+    const ui = await mountedGrid({ props: { events: placementEvents, onChange: async () => { writes++; throw new Error('disk failure'); } } });
+    const { act } = ui.TestRenderer;
+    const pan = blockPart(ui.renderer, ui.EventBlock, 'C').Pan;
+    await act(async () => { pan.callbacks.onBegin(); pan.callbacks.onStart(); pan.callbacks.onUpdate({ translationX: 0, translationY: -156 }); });
+    await act(async () => pan.callbacks.onFinalize({}, success));
+    assert.equal(writes, success ? 1 : 0);
+    assert.deepEqual(ui.renderer.root.findAllByType(ui.EventBlock).map(node => node.props.event), placementEvents);
+    assert(ui.animations.some(value => value.kind === 'spring' && value.value === 102));
+    assert(ui.animations.some(value => value.kind === 'spring' && value.value === 781));
+    if (success) assert(ui.renderer.root.findAllByType('Text').some(node => String(node.props.children).includes('저장하지 못했습니다')));
+    await act(async () => ui.renderer.unmount());
+  }
+});
+
+test('a newly occupied destination is checked again before the final move save', async () => {
+  const writes = [];
+  const ui = await mountedGrid({ props: { events: [placementEvents[2]], onChange: async value => writes.push(value) } });
+  const { act } = ui.TestRenderer;
+  const block = () => ui.renderer.root.findByType(ui.EventBlock);
+  const originalEnd = block().props.onEnd;
+  await act(async () => { block().props.onBegin('C', 'move'); block().props.onUpdate('C', 0, -156); });
+  const updated = [placementEvents[2], { ...placementEvents[0], startMinute: 720, endMinute: 780 }];
+  await act(async () => ui.renderer.update(ui.React.createElement(ui.TimetableGrid, { ...ui.props, events: updated })));
+  await act(async () => originalEnd('C', true));
+  assert.deepEqual(writes, []);
+  assert.deepEqual(ui.renderer.root.findAllByType(ui.EventBlock).map(node => node.props.event), updated);
+  await act(async () => ui.renderer.unmount());
+});
+
+test('26px rows keep short blocks and both handle targets inside the row in weeks, presets and import previews', async () => {
+  const short = [
+    { ...events[0], startMinute: 540, endMinute: 570 },
+    { ...events[1], startMinute: 570, endMinute: 600 },
+    { ...events[2], startMinute: 600, endMinute: 660 },
+  ];
+  for (const variant of [{}, { template: true }, { readOnly: true }]) {
+    const ui = await mountedGrid({ props: { ...variant, events: short } });
+    const { act } = ui.TestRenderer;
+    for (const expanded of [false, true]) {
+      if (expanded) await act(async () => ui.renderer.root.findAllByType('Pressable').find(node => node.findAllByType('Text').some(text => text.props.children === '확대 편집')).props.onPress());
+      const blocks = ui.renderer.root.findAllByType(ui.EventBlock);
+      const first = flatStyle(blockView(ui.renderer, ui.EventBlock, 'A').props.style);
+      const next = flatStyle(blockView(ui.renderer, ui.EventBlock, 'B').props.style);
+      assert.equal(first.height, 24); assert(first.top + first.height <= next.top);
+      assert.equal(first.width, blocks[0].props.dayWidth - 4);
+      assert.equal(first.minHeight, undefined);
+      const parts = blocks[0].findAllByType('GestureDetector');
+      const top = flatStyle(parts[0].findAllByType('View')[0].props.style);
+      const bottom = flatStyle(parts[2].findAllByType('View')[0].props.style);
+      assert.equal(top.top, 0); assert.equal(bottom.bottom, 0);
+      assert(top.height + bottom.height <= first.height);
+      assert.equal(parts[0].findAllByType('View')[0].props.hitSlop, undefined);
+      assert.equal(parts[1].findAllByType('Text').length, 1);
+      assert.equal(parts[1].findByType('Text').props.numberOfLines, 1);
+      assert.equal(blocks[2].findAllByType('GestureDetector')[1].findAllByType('Text').length, 2);
+    }
+    const scrollers = ui.renderer.root.findAllByType('View').filter(node => node.props.contentOffset);
+    assert(scrollers.every(node => node.props.contentOffset.y === 416));
+    assert(ui.renderer.root.findAllByType('View').some(node => node.props.style?.height === 1248));
+    await act(async () => ui.renderer.unmount());
+  }
+});
+
+test('legacy overlapping blocks use full width and every hidden row has a direct edit entry', async () => {
+  const edits = [];
+  const overlapping = [events[0], { ...events[1], startMinute: 570, endMinute: 630 }, events[2]];
+  const ui = await mountedGrid({ props: { events: overlapping, onEdit: id => edits.push(id) } });
+  const { act } = ui.TestRenderer;
+  for (const block of ui.renderer.root.findAllByType(ui.EventBlock)) {
+    const style = flatStyle(blockView(ui.renderer, ui.EventBlock, block.props.event.id).props.style);
+    assert.equal(style.width, block.props.dayWidth - 4);
+    assert.equal(style.left, 2);
+    assert.equal(block.props.lane, undefined); assert.equal(block.props.lanes, undefined);
+  }
+  const entries = ui.renderer.root.findAllByType('Pressable').filter(node => node.props.accessibilityLabel?.startsWith('겹친 일정'));
+  assert.equal(entries.length, 2);
+  for (const entry of entries) await act(async () => entry.props.onPress());
+  assert.deepEqual(edits, ['A', 'B']);
+  assert.deepEqual(ui.props.events, overlapping);
+  await act(async () => ui.renderer.unmount());
+});
+
+test('event editor displays the repository collision message and retains the manually entered times', async t => {
+  const repo = repository(t); await repo.initialize();
+  await repo.saveEvent({ ...placementEvents[0], date: '2026-11-16' }, 'A');
+  await repo.saveEvent({ ...placementEvents[2], date: '2026-11-16' }, 'C');
+  const before = await repo.initialize();
+  const ui = createUiHarness(); const { act } = ui.TestRenderer;
+  const { EventEditor } = ui.load('src/components/events/event-editor.tsx');
+  let closes = 0, renderer;
+  await act(async () => { renderer = ui.TestRenderer.create(ui.React.createElement(EventEditor, {
+    draft: { ...placementEvents[2], date: '2026-11-16', startMinute: 690, endMinute: 810 },
+    onClose: () => { closes++; }, onSave: (value, id) => repo.saveEvent(value, id), onDelete: async () => {},
+  })); });
+  await act(async () => button(renderer, '저장').props.onPress());
+  assert.equal(closes, 0);
+  assert(renderer.root.findAllByType('Text').some(node => String(node.props.children).includes('겹치지 않는 시간')));
+  assert.equal(renderer.root.findAllByType('TextInput').find(node => node.props.accessibilityLabel === '시작 시간').props.value, '11:30');
+  assert.equal(renderer.root.findAllByType('TextInput').find(node => node.props.accessibilityLabel === '종료 시간').props.value, '13:30');
+  assert.deepEqual(await repo.initialize(), before);
+  await act(async () => renderer.unmount());
 });

@@ -5,6 +5,7 @@ import { eventColors, palette, weekdays } from '@/constants/calendar';
 import { addDays, formatTime, monthTitle, parseTime, shiftMonth } from '@/lib/dates';
 import { MonthCalendar } from '@/components/calendar/month-calendar';
 import { Action } from '@/components/ui/calendar-ui';
+import { TimetableActionError } from '@/lib/timetable';
 import type { EventInput, TemplateInput } from '@/types/calendar';
 
 export interface EditorDraft extends EventInput { id?: string; weekday?: number }
@@ -35,7 +36,7 @@ export function EventEditor({ draft, template = false, onClose, onSave, onDelete
     }
     setBusy(true);
     try { await onSave({ title, date, weekday, startMinute, endMinute, color }, draft.id); onClose(); }
-    catch { setError('저장하지 못했습니다. 다시 시도해 주세요.'); }
+    catch (cause) { setError(cause instanceof TimetableActionError ? cause.message : '저장하지 못했습니다. 다시 시도해 주세요.'); }
     finally { setBusy(false); }
   };
   const remove = async () => {

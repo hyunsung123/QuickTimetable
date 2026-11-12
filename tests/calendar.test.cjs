@@ -7,7 +7,7 @@ const { join } = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { CalendarRepository } = require('../.test-build/lib/repository');
 const dates = require('../.test-build/lib/dates');
-const { dragEvent, eventLanes, resizeBoundary, beginTimetableDrag, updateTimetableDrag, finishTimetableDrag, copyEvent, pastedEvent } = require('../.test-build/lib/timetable');
+const { dragEvent, conflictingEventIds, resizeBoundary, beginTimetableDrag, updateTimetableDrag, finishTimetableDrag, copyEvent, pastedEvent } = require('../.test-build/lib/timetable');
 const { BlockPressSession } = require('../.test-build/lib/timetable-press');
 const { contextMenuPosition, contextMenuSize } = require('../.test-build/lib/context-menu');
 
@@ -78,24 +78,24 @@ test('block movement changes days, keeps duration, snaps, and stays within day/w
   assert.equal(moved.endMinute - moved.startMinute, 120);
   const late = dragEvent(event, 'move', 9999, 9999, 100, 44);
   assert.equal(late.day, 6);
-  assert.equal(late.startMinute, 1320);
+  assert.equal(late.startMinute, 1410);
   assert.equal(late.endMinute, 1440);
   const early = dragEvent(event, 'move', -9999, -9999, 100, 44);
   assert.equal(early.day, 0);
   assert.equal(early.startMinute, 0);
 });
 
-test('overlapping blocks get separate lanes and adjacent blocks reuse space', () => {
-  const lanes = eventLanes([event, { ...event, id: 'overlap', startMinute: 600, endMinute: 690 }, { ...event, id: 'after', startMinute: 690, endMinute: 720 }]);
-  assert.equal(lanes.get('drag').lanes, 2);
-  assert.notEqual(lanes.get('drag').lane, lanes.get('overlap').lane);
-  assert.equal(lanes.get('after').lanes, 1);
+test('legacy overlap detection preserves records and excludes adjacent blocks', () => {
+  const input = [event, { ...event, id: 'overlap', startMinute: 600, endMinute: 690 }, { ...event, id: 'after', startMinute: 690, endMinute: 720 }];
+  const before = structuredClone(input);
+  assert.deepEqual([...conflictingEventIds(input)], ['drag', 'overlap']);
+  assert.deepEqual(input, before);
 });
 
 test('SQLite event CRUD shares one ordered snapshot and preserves creation/origin metadata', async t => {
   const { repo, db } = database(); t.after(() => db.close());
   await repo.initialize();
-  await repo.saveEvent({ ...base, date: '2026-11-10', startMinute: 600, endMinute: 630 }, 'later');
+  await repo.saveEvent({ ...base, date: '2026-11-10', startMinute: 660, endMinute: 690 }, 'later');
   let snapshot = await repo.saveEvent({ ...base, date: '2026-11-10' }, 'first');
   assert.deepEqual(snapshot.events.map(item => item.id), ['first', 'later']);
   assert.equal(snapshot.events[0].calendarId, 'personal');
@@ -307,8 +307,8 @@ test('drag preview changes both blocks and cancel restores every original record
   assert.deepEqual(cancelled.events, adjacent);
   assert.deepEqual(cancelled.changes, []);
   assert.deepEqual(start.original, adjacent);
-  const moved = updateTimetableDrag(beginTimetableDrag(adjacent, 'A', 'move'), 100, 44, 100, 44);
-  assert.equal(finishTimetableDrag(moved, true).movedEvent.day, 1);
+  const moved = updateTimetableDrag(beginTimetableDrag(adjacent, 'A', 'move'), 200, 44, 100, 44);
+  assert.equal(finishTimetableDrag(moved, true).movedEvent.day, 2);
   assert.deepEqual(finishTimetableDrag(moved, false).events, adjacent);
 });
 
@@ -327,11 +327,11 @@ test('hold release opens copy only after 350ms and actual dragging permanently s
   assert.equal(press.releaseTap(true), true);
 });
 
-test('copy payload has only title, color and duration, and paste preserves length at midnight', () => {
+test('copy payload has only title, color and duration, and paste fits before midnight', () => {
   const clipboard = copyEvent({ ...adjacent[0], date: '2026-11-10', calendarId: 'personal' });
   assert.deepEqual(clipboard, { title: '공부', color: '#426FD0', durationMinute: 60 });
   assert.deepEqual(pastedEvent(clipboard, 1380), { title: '공부', color: '#426FD0', startMinute: 1380, endMinute: 1440 });
-  assert.throws(() => pastedEvent(clipboard, 1410));
+  assert.equal(pastedEvent(clipboard, 1410).endMinute, 1440);
   assert.throws(() => pastedEvent({ ...clipboard, durationMinute: 15 }, 540));
 });
 
@@ -422,7 +422,8 @@ test('stale/deleted rows, cross-date pairs and newly overlapping data reject the
   await assert.rejects(repo.updateEventTimes(changes));
   assert.deepEqual(await repo.initialize(), crossDate);
   await repo.saveEvent({ ...base, date: '2026-11-10', startMinute: 600, endMinute: 660 }, 'B');
-  await repo.saveEvent({ ...base, date: '2026-11-10', startMinute: 600, endMinute: 630 }, 'overlap');
+  // Simulate a row already stored by the older overlap-permitting version.
+  db.exec("INSERT INTO events VALUES ('overlap', 'personal', '기존 겹침', '2026-11-10', 600, 630, '#426FD0', 'old', 'old', NULL)");
   const overlap = await repo.initialize();
   await assert.rejects(repo.updateEventTimes(changes));
   assert.deepEqual(await repo.initialize(), overlap);
@@ -442,10 +443,12 @@ test('repeated paste gives new IDs, keeps the source, and never overwrites colli
     assert.equal(item.title, before.title); assert.equal(item.color, before.color);
     assert.equal(item.templateId, null);
   }
-  for (const start of [570, 600, 630, 690]) await assert.rejects(repo.pasteEvent(clipboard, '2026-11-11', start));
+  for (const start of [600, 630, 690]) await assert.rejects(repo.pasteEvent(clipboard, '2026-11-11', start));
   assert.deepEqual(await repo.initialize(), after);
-  await assert.rejects(repo.pasteEvent(clipboard, '2026-11-11', 1410));
-  assert.deepEqual(await repo.initialize(), after);
+  const fitted = await repo.pasteEvent(clipboard, '2026-11-11', 570);
+  assert.equal(fitted.events.find(row => row.startMinute === 570).endMinute, 600);
+  const midnight = await repo.pasteEvent(clipboard, '2026-11-11', 1410);
+  assert.equal(midnight.events.find(row => row.startMinute === 1410).endMinute, 1440);
 });
 
 test('concurrent pastes recheck collisions in their transaction and produce only one new row', async t => {
